@@ -6,23 +6,26 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
+mod prsr;
 mod usps;
+use prsr::Prsr;
 use usps::UspsClient;
 mod models;
 use models::Address;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+pub async fn main() -> Result<()> {
     let reps = load_house_list().await?;
     println!("{} representatives", reps.len());
     let mut usps_cli = UspsClient::new();
-    let adrs = load_house_addresses(&reps, 7, usize::MAX, &mut usps_cli).await?;
+    let prsr = Prsr::new();
+    let adrs = load_house_addresses(&reps, 297, usize::MAX, &mut usps_cli, &prsr).await?;
     println!("{} representative addresses", adrs.len());
-    // write_addresses_to_csv("house.csv", &adrs)?;
+    write_addresses_to_csv("house.csv", &adrs)?;
     Ok(())
 }
 
-async fn load_house_list() -> Result<Vec<House>> {
+pub async fn load_house_list() -> Result<Vec<House>> {
     // File path to store the JSON data.
     let file_path = "house_list.json";
     // Read representatives file from disk.
@@ -59,95 +62,101 @@ async fn load_house_list() -> Result<Vec<House>> {
     Ok(reps)
 }
 
-async fn load_house_addresses(
+pub async fn load_house_addresses(
     reps: &[House],
     idx_skp: usize,
     cnt_tak: usize,
     usps_cli: &mut UspsClient,
+    prsr: &Prsr,
 ) -> Result<Vec<Address>> {
     // File path to store the JSON data.
     let file_path = "house_addresses.json";
-    // Read representatives file from disk.
-    let adrs = match read_from_file::<Address>(file_path) {
-        Ok(adrs_from_disk) => {
-            // Read from disk.
-            adrs_from_disk
-        }
-        Err(err) => {
-            // File not available.
-            eprintln!("read file {}: err: {}", file_path, err);
 
-            // Fetch from network.
-            let mut adrs: Vec<Address> = Vec::with_capacity(reps.len() * 4);
-            let cli = Client::new();
-            for (idx, rep) in reps.iter().enumerate().skip(idx_skp).take(cnt_tak) {
-                eprint!("idx:{} ", idx);
+    // TODO: UNCOMMENT
+    //// Read representatives file from disk.
+    // let adrs = match read_from_file::<Address>(file_path) {
+    //     Ok(adrs_from_disk) => {
+    //         // Read from disk.
+    //         adrs_from_disk
+    //     }
+    //     Err(err) => {
+    //         // File not available.
+    //         eprintln!("read file {}: err: {}", file_path, err);
 
-                // Fetch representative addresses as Vec<String>.
-                let mut adr_lnes = fetch_house_addresses_contact(rep, "contact", &cli).await?;
+    // Fetch from network.
+    let mut adrs: Vec<Address> = Vec::with_capacity(reps.len() * 4);
+    let cli = Client::new();
+    for (idx, rep) in reps.iter().enumerate().skip(idx_skp).take(cnt_tak) {
+        eprint!("idx:{} ", idx);
+
+        // Fetch representative addresses as Vec<String>.
+        let mut adr_lnes = fetch_house_addresses_contact(rep, "contact", &cli, prsr).await?;
+        if adr_lnes.is_none() {
+            adr_lnes = fetch_house_addresses_contact(rep, "contact/offices", &cli, prsr).await?;
+            if adr_lnes.is_none() {
+                adr_lnes =
+                    fetch_house_addresses_contact(rep, "contact/office-locations", &cli, prsr)
+                        .await?;
                 if adr_lnes.is_none() {
-                    adr_lnes = fetch_house_addresses_contact(rep, "contact/offices", &cli).await?;
+                    adr_lnes = fetch_house_addresses_main_footer(rep, &cli, prsr).await?;
                     if adr_lnes.is_none() {
-                        adr_lnes =
-                            fetch_house_addresses_contact(rep, "contact/office-locations", &cli)
-                                .await?;
-                        if adr_lnes.is_none() {
-                            adr_lnes = fetch_house_addresses_main_footer(rep, &cli).await?;
-                            if adr_lnes.is_none() {
-                                adr_lnes = fetch_house_addresses_main(rep, &cli).await?;
-                            }
-                        }
-                    }
-                }
-                // if idx_skp != 0 {
-                //     eprintln!("{:?}", adr_lnes);
-                // }
-
-                match adr_lnes {
-                    None => {
-                        return Err(anyhow!(
-                            "representative: missing address lines (idx:{} rep:{:?})",
-                            idx,
-                            rep
-                        ));
-                    }
-                    Some(lnes) => {
-                        // Parse addresses for current representative.
-                        match extract_house_addresses(rep, &lnes) {
-                            None => {
-                                return Err(anyhow!("house: no addresses parsed for {:?}", rep));
-                            }
-                            Some(mut new_adrs) => {
-                                // Validate addresses for current representative.
-                                validate_house_addresses(rep, &new_adrs)?;
-
-                                eprintln!("{new_adrs:?}");
-
-                                standardize_house_addresses(rep, &mut new_adrs, usps_cli).await?;
-
-                                eprintln!("{new_adrs:?}");
-
-                                adrs.extend(new_adrs);
-                            }
-                        }
+                        adr_lnes = fetch_house_addresses_main(rep, &cli, prsr).await?;
                     }
                 }
             }
-
-            // Write addresses to disk.
-            write_to_file(&adrs, file_path)?;
-
-            adrs
         }
-    };
+        // if idx_skp != 0 {
+        //     eprintln!("{:?}", adr_lnes);
+        // }
+
+        match adr_lnes {
+            None => {
+                return Err(anyhow!(
+                    "representative: missing address lines (idx:{} rep:{:?})",
+                    idx,
+                    rep
+                ));
+            }
+            Some(lnes) => {
+                // Parse addresses for current representative.
+                match extract_house_addresses(rep, &lnes) {
+                    None => {
+                        return Err(anyhow!("house: no addresses parsed for {:?}", rep));
+                    }
+                    Some(mut new_adrs) => {
+                        // Validate addresses for current representative.
+                        validate_house_addresses(rep, &new_adrs)?;
+
+                        eprintln!("{new_adrs:?}");
+
+                        // TODO:
+                        // standardize_addresses(&mut new_adrs, usps_cli).await?;
+
+                        // eprintln!("{new_adrs:?}");
+
+                        adrs.extend(new_adrs);
+                    }
+                }
+            }
+        }
+    }
+
+    // Write addresses to disk.
+    write_to_file(&adrs, file_path)?;
+
+    // TODO: UNCOMMENT
+    // adrs
+    //     }
+    // };
 
     Ok(adrs)
 }
 
 /// Selects representative addresses from the html footer.
-async fn fetch_house_addresses_main_footer(
+pub async fn fetch_house_addresses_main_footer(
     rep: &House,
     cli: &Client,
+    prsr: &Prsr,
 ) -> Result<Option<Vec<String>>> {
     // Fetch a URL.
     let html = fetch_html(&rep.url, cli).await?;
@@ -162,29 +171,32 @@ async fn fetch_house_addresses_main_footer(
         // Get lines and filter.
         let mut lnes = elm
             .text()
-            .map(|s| s.trim().trim_end_matches(',').to_string())
+            .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
             .filter(|s| {
                 !s.is_empty()
-                    && !s.contains("document.querySelector")
-                    && !s.contains("webform")
-                    && !s.contains("iframe")
-                    && !s.contains("z-index")
-                    && !s.contains("!important;")
+                    && !s.contains("DOCUMENT.QUERYSELECTOR")
+                    && !s.contains("FORM")
+                    && !s.contains("IFRAME")
+                    && !s.contains("FUNCTION")
+                    && !s.contains("Z-INDEX")
+                    && !s.contains("!IMPORTANT;")
                     && !s.starts_with('(')
-                    && !s.contains("Phone:")
-                    && !s.contains("Fax:")
-                    && !s.contains("a.m.")
+                    && !s.contains("PHONE:")
+                    && !s.contains("FAX:")
+                    && !s.contains("A.M.")
+                    && !prsr.re_flt.is_match(s)
             })
             .collect::<Vec<String>>();
 
         eprintln!("{lnes:?}");
 
         // Edit the footer text to make it easier to parse.
+        edit_split_bar(&mut lnes);
         edit_split_city_state_zip(&mut lnes);
         edit_drain_after_last_zip(&mut lnes);
         edit_hob(&mut lnes);
-        edit_hob_room(&mut lnes);
         edit_dc(&mut lnes);
+
         // edit_split_suite(&mut lnes);
 
         eprintln!("{lnes:?}");
@@ -197,7 +209,11 @@ async fn fetch_house_addresses_main_footer(
     Ok(None)
 }
 
-async fn fetch_house_addresses_main(rep: &House, cli: &Client) -> Result<Option<Vec<String>>> {
+pub async fn fetch_house_addresses_main(
+    rep: &House,
+    cli: &Client,
+    prsr: &Prsr,
+) -> Result<Option<Vec<String>>> {
     // Fetch a URL.
     let html = fetch_html(&rep.url, cli).await?;
 
@@ -211,29 +227,32 @@ async fn fetch_house_addresses_main(rep: &House, cli: &Client) -> Result<Option<
         // Get lines and filter.
         let mut lnes = elm
             .text()
-            .map(|s| s.trim().trim_end_matches(',').to_string())
+            .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
             .filter(|s| {
                 !s.is_empty()
-                    && !s.contains("document.querySelector")
-                    && !s.contains("webform")
-                    && !s.contains("iframe")
-                    && !s.contains("z-index")
-                    && !s.contains("!important;")
+                    && !s.contains("DOCUMENT.QUERYSELECTOR")
+                    && !s.contains("FORM")
+                    && !s.contains("IFRAME")
+                    && !s.contains("FUNCTION")
+                    && !s.contains("Z-INDEX")
+                    && !s.contains("!IMPORTANT;")
                     && !s.starts_with('(')
-                    && !s.contains("Phone:")
-                    && !s.contains("Fax:")
-                    && !s.contains("a.m.")
+                    && !s.contains("PHONE:")
+                    && !s.contains("FAX:")
+                    && !s.contains("A.M.")
+                    && !prsr.re_flt.is_match(s)
             })
             .collect::<Vec<String>>();
 
         eprintln!("{lnes:?}");
 
         // Edit the footer text to make it easier to parse.
+        edit_split_bar(&mut lnes);
         edit_split_city_state_zip(&mut lnes);
         edit_drain_after_last_zip(&mut lnes);
         edit_hob(&mut lnes);
-        edit_hob_room(&mut lnes);
         edit_dc(&mut lnes);
+
         // edit_split_suite(&mut lnes);
 
         eprintln!("{lnes:?}");
@@ -246,10 +265,11 @@ async fn fetch_house_addresses_main(rep: &House, cli: &Client) -> Result<Option<
     Ok(None)
 }
 
-async fn fetch_house_addresses_contact(
+pub async fn fetch_house_addresses_contact(
     rep: &House,
     path: &str,
     cli: &Client,
+    prsr: &Prsr,
 ) -> Result<Option<Vec<String>>> {
     // Some representative addresses are in a contact webpage.
 
@@ -265,7 +285,12 @@ async fn fetch_house_addresses_contact(
     // let selector = Selector::parse(".internal__offices--address").unwrap();
     // let selector = Selector::parse("address").unwrap();
     let mut lnes: Vec<String> = Vec::new();
-    for txt in ["address", ".internal__offices--address"] {
+    for txt in [
+        "address",
+        ".internal__offices--address",
+        ".office-locations",
+        "body",
+    ] {
         let selector = Selector::parse(txt).unwrap();
         for elm in document.select(&selector) {
             // Fetching "https://allen.house.gov/contact"...
@@ -278,16 +303,21 @@ async fn fetch_house_addresses_contact(
             // Get lines and filter.
             let cur_lnes = elm
                 .text()
-                .map(|s| s.trim().to_string())
+                .map(|s| s.trim().to_uppercase().to_string())
                 .filter(|s| {
                     !s.is_empty()
+                        && !s.contains("IFRAME")
+                        && !s.contains("FUNCTION")
+                        && !s.contains("FORM")
+                        && !s.contains("!IMPORTANT;")
                         && !s.starts_with('(')
-                        && !s.contains("Phone:")
-                        && !s.contains("Fax:")
+                        && !s.contains("PHONE:")
+                        && !s.contains("FAX:")
+                        && !prsr.re_flt.is_match(s)
                 })
                 .collect::<Vec<String>>();
 
-            // eprintln!("{cur_lnes:?}");
+            eprintln!("{cur_lnes:?}");
 
             lnes.extend(cur_lnes);
         }
@@ -300,12 +330,13 @@ async fn fetch_house_addresses_contact(
     // eprintln!("{lnes:?}");
 
     // Edit lines to make it easier to parse.
+    edit_split_bar(&mut lnes);
     edit_split_city_state_zip(&mut lnes);
     edit_disjoint_zip(&mut lnes);
     edit_drain_after_last_zip(&mut lnes);
     edit_hob(&mut lnes);
-    edit_hob_room(&mut lnes);
     edit_dc(&mut lnes);
+
     // edit_split_suite(&mut lnes);
 
     // eprintln!("--- {lnes:?}");
@@ -317,7 +348,7 @@ async fn fetch_house_addresses_contact(
     Ok(None)
 }
 
-fn validate_houses(reps: &[House]) -> Result<()> {
+pub fn validate_houses(reps: &[House]) -> Result<()> {
     for (idx, rep) in reps.iter().enumerate() {
         if rep.first_name.is_empty() {
             return Err(anyhow!(
@@ -344,7 +375,7 @@ fn validate_houses(reps: &[House]) -> Result<()> {
     Ok(())
 }
 
-fn extract_houses(html: &str) -> Result<Vec<House>> {
+pub fn extract_houses(html: &str) -> Result<Vec<House>> {
     let mut reps = Vec::new();
 
     let document = Html::parse_document(html);
@@ -367,7 +398,9 @@ fn extract_houses(html: &str) -> Result<Vec<House>> {
                 rep.first_name = first_name.trim().to_string();
                 rep.last_name = last_name.trim().to_string();
             }
-            if rep.first_name.is_empty() {
+            // Skip empty or vacancy.
+            // "Mike - Vacancy"
+            if rep.first_name.is_empty() || rep.first_name.ends_with("Vacancy") {
                 continue;
             }
             rep.url = element
@@ -387,7 +420,7 @@ fn extract_houses(html: &str) -> Result<Vec<House>> {
     Ok(reps)
 }
 
-async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
+pub async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
     eprintln!("Fetching {url:?}...");
     let res = cli.get(url).send().await?;
     let bdy = res.text().await?;
@@ -395,7 +428,7 @@ async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
 }
 
 // Function to serialize and write a list to a file in JSON format
-fn write_to_file<T: Serialize>(data: &Vec<T>, file_path: &str) -> Result<()> {
+pub fn write_to_file<T: Serialize>(data: &Vec<T>, file_path: &str) -> Result<()> {
     eprintln!("Writing file: {}", file_path);
     let file = File::create(file_path)?;
     let writer = BufWriter::new(file);
@@ -404,7 +437,7 @@ fn write_to_file<T: Serialize>(data: &Vec<T>, file_path: &str) -> Result<()> {
 }
 
 // Function to deserialize and read a list from a file
-fn read_from_file<T: for<'de> Deserialize<'de>>(file_path: &str) -> Result<Vec<T>> {
+pub fn read_from_file<T: for<'de> Deserialize<'de>>(file_path: &str) -> Result<Vec<T>> {
     eprintln!("Reading file: {}", file_path);
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
@@ -412,22 +445,22 @@ fn read_from_file<T: for<'de> Deserialize<'de>>(file_path: &str) -> Result<Vec<T
     Ok(data)
 }
 
-fn ends_with_5digits(lne: &str) -> bool {
+pub fn ends_with_5digits(lne: &str) -> bool {
     if lne.len() < 5 {
         return false;
     }
     lne.chars().skip(lne.len() - 5).all(|c| c.is_ascii_digit())
 }
 
-fn is_5digits(lne: &str) -> bool {
+pub fn is_5digits(lne: &str) -> bool {
     lne.len() == 5 && ends_with_5digits(lne)
 }
 
-fn is_all_digits(lne: &str) -> bool {
+pub fn is_all_digits(lne: &str) -> bool {
     lne.chars().all(|c| c.is_ascii_digit())
 }
 
-fn has_lne_zip(lnes: &[String]) -> bool {
+pub fn has_lne_zip(lnes: &[String]) -> bool {
     let mut has_zip = false;
 
     for lne in lnes {
@@ -440,7 +473,7 @@ fn has_lne_zip(lnes: &[String]) -> bool {
     has_zip
 }
 
-fn edit_drain_after_last_zip(lnes: &mut Vec<String>) {
+pub fn edit_drain_after_last_zip(lnes: &mut Vec<String>) {
     // Trim the list after the last zip code.
     // Search for the last zip code.
     for idx in (0..lnes.len()).rev() {
@@ -451,28 +484,48 @@ fn edit_drain_after_last_zip(lnes: &mut Vec<String>) {
     }
 }
 
-fn edit_hob(lnes: &mut Vec<String>) {
+pub fn edit_hob(lnes: &mut Vec<String>) {
     // Trim list prefix prior to "House Office Building"
-    // "2312 Rayburn House Office Building"
-    // "2430 Rayburn House Office Bldg."
-    for idx in 0..lnes.len() {
-        let lne_upr = lnes[idx].to_uppercase();
-        if let Some(hob_idx) = lne_upr.find("HOUSE OFFICE") {
+    // Reverse indexes to allow for room line removal.
+    for idx in (0..lnes.len()).rev() {
+        // "1107 LONGWORTH HOUSE", "OFFICE BUILDING"
+        if idx + 1 != lnes.len()
+            && lnes[idx].ends_with("HOUSE")
+            && lnes[idx + 1] == "OFFICE BUILDING"
+        {
+            lnes[idx].push_str(" OFFICE BUILDING");
+            lnes.remove(idx + 1);
+        }
+
+        // "2312 RAYBURN HOUSE OFFICE BUILDING"
+        // "2430 RAYBURN HOUSE OFFICE BLDG."
+        if let Some(hob_idx) = lnes[idx].find("HOUSE OFFICE") {
             lnes[idx].truncate(hob_idx);
             lnes[idx].push_str("HOB");
             // No break. Can have duplicate addresses.
         }
-        // "1119 Longworth H.O.B."
+        // "1119 LONGWORTH H.O.B."
         // "H.O.B." -> "HOB"
-        if let Some(hob_idx) = lne_upr.find("H.O.B.") {
+        if let Some(hob_idx) = lnes[idx].find("H.O.B.") {
             lnes[idx].truncate(hob_idx);
             lnes[idx].push_str("HOB");
             // No break. Can have duplicate addresses.
+        }
+        // Insert Room number to HOB if necessary.
+        // "LONGWORTH HOB", "ROOM 1027"
+        // Still check for ends with HOB as some addresses may originally have it.
+        if idx + 1 != lnes.len()
+            && lnes[idx + 1].contains("ROOM")
+            && lnes[idx].trim().ends_with("HOB")
+        {
+            let room: Vec<&str> = lnes[idx + 1].split_whitespace().collect();
+            lnes[idx] = format!("{} {}", room[1], lnes[idx]);
+            lnes.remove(idx + 1);
         }
     }
 }
 
-fn edit_split_suite(lnes: &mut Vec<String>) {
+pub fn edit_split_suite(lnes: &mut Vec<String>) {
     // "29 Crafts Street, Suite 375"
     for idx in (0..lnes.len()).rev() {
         let lne_upr = lnes[idx].to_uppercase();
@@ -486,7 +539,7 @@ fn edit_split_suite(lnes: &mut Vec<String>) {
     }
 }
 
-fn edit_split_city_state_zip(lnes: &mut Vec<String>) {
+pub fn edit_split_city_state_zip(lnes: &mut Vec<String>) {
     // eprintln!("{lnes:?}");
     // Split city, state, zip if necessary
     // "Syracuse, NY  13202"
@@ -509,20 +562,7 @@ fn edit_split_city_state_zip(lnes: &mut Vec<String>) {
     }
 }
 
-fn edit_hob_room(lnes: &mut Vec<String>) {
-    // Insert Room number to HOB if necessary.
-    // "Longworth HOB", "Room 1027"
-    for idx in 0..lnes.len() {
-        if lnes[idx].to_uppercase().contains("ROOM") {
-            let wrds: Vec<&str> = lnes[idx].split_whitespace().collect();
-            lnes[idx - 1] = format!("{} {}", wrds[1], lnes[idx - 1]);
-            lnes.remove(idx);
-            break;
-        }
-    }
-}
-
-fn edit_dc(lnes: &mut Vec<String>) {
+pub fn edit_dc(lnes: &mut Vec<String>) {
     // Transform "D.C." -> "DC"
     for idx in 0..lnes.len() {
         if lnes[idx] == "DC" {
@@ -535,7 +575,39 @@ fn edit_dc(lnes: &mut Vec<String>) {
     }
 }
 
-fn edit_disjoint_zip(lnes: &mut Vec<String>) {
+pub fn edit_split_bar(lnes: &mut Vec<String>) {
+    // "WELLS FARGO PLAZA | 221 N. KANSAS STREET | SUITE 1500", "EL PASO, TX 79901 |"
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx].contains('|') {
+            let lne = lnes[idx].clone();
+            lnes.remove(idx);
+            for new_lne in lne.split_terminator('|').rev() {
+                if !new_lne.is_empty() {
+                    lnes.insert(idx, new_lne.trim().to_string());
+                }
+            }
+        }
+    }
+}
+
+// pub fn edit_address1(lnes: &mut Vec<String>) {
+//     // Transform
+//     // "U.S. Federal Building, 220 E Rosser Avenue", "Room 228"
+//     // "220 E Rosser Avenue", "Room 228 U.S. Federal Building"
+
+//     // TODO:
+//     // for idx in 0..lnes.len() {
+//     //     if lnes[idx] == "DC" {
+//     //         break;
+//     //     }
+//     //     if lnes[idx] == "D.C." {
+//     //         lnes[idx] = "DC".to_string();
+//     //         break;
+//     //     }
+//     // }
+// }
+
+pub fn edit_disjoint_zip(lnes: &mut Vec<String>) {
     // Combine disjointed zip code.
     // "Vidalia, GA 304", "74"
     for idx in (1..lnes.len()).rev() {
@@ -549,7 +621,7 @@ fn edit_disjoint_zip(lnes: &mut Vec<String>) {
     }
 }
 
-fn extract_house_addresses(rep: &House, lnes: &[String]) -> Option<Vec<Address>> {
+pub fn extract_house_addresses(rep: &House, lnes: &[String]) -> Option<Vec<Address>> {
     // Fetching "https://brandonwilliams.house.gov/"...
     // ["1022 Longworth HOB", "Washington", "DC", "20515", "Syracuse District Office", "The Galleries of Syracuse", "440 South Warren Street", "Suite #706", "Syracuse", "NY", "13202", "Utica District Office", "421 Broad Street", "Suite #7", "Utica", "NY", "13501"]
     // Fetching "https://wilson.house.gov/"...
@@ -589,7 +661,16 @@ fn extract_house_addresses(rep: &House, lnes: &[String]) -> Option<Vec<Address>>
                 adr.address2 = Some(lnes[idx - 3].clone());
                 adr.address1.clone_from(&lnes[idx - 4]);
             } else {
-                adr.address1.clone_from(&lnes[idx - 3]);
+                // Check for cases:
+                //  "U.S. Federal Building, 220 E Rosser Avenue", "Room 228", "Bismarck,", "ND", "58501"
+                if adr.zip == "58501" {
+                    let vals: Vec<&str> = lnes[idx - 4].split_terminator(',').collect();
+                    adr.address1 = vals[1].trim().to_string();
+                    adr.address2 = Some(format!("{} {}", vals[0].trim(), lnes[idx - 3]));
+                } else {
+                    // Standard case.
+                    adr.address1.clone_from(&lnes[idx - 3]);
+                }
             }
             // adr.address1.clone_from(&lnes[idx - 3]);
             // Disabled suite spliting
@@ -618,7 +699,7 @@ fn extract_house_addresses(rep: &House, lnes: &[String]) -> Option<Vec<Address>>
     Some(adrs)
 }
 
-fn validate_house_addresses(rep: &House, adrs: &[Address]) -> Result<()> {
+pub fn validate_house_addresses(rep: &House, adrs: &[Address]) -> Result<()> {
     for (idx, adr) in adrs.iter().enumerate() {
         if adr.first_name.is_empty() {
             return Err(anyhow!(
@@ -667,19 +748,46 @@ fn validate_house_addresses(rep: &House, adrs: &[Address]) -> Result<()> {
     Ok(())
 }
 
-async fn standardize_house_addresses(
-    rep: &House,
-    adrs: &mut [Address],
+pub async fn standardize_addresses(
+    adrs: &mut Vec<Address>,
     usps_cli: &mut UspsClient,
 ) -> Result<()> {
-    for adr in adrs.iter_mut().rev() {
-        usps_cli.standardize_address(adr).await?
+    for idx in (0..adrs.len()).rev() {
+        match usps_cli.standardize_address(&mut adrs[idx]).await {
+            Ok(_) => {
+                // Edit cases:
+                // 2743 PERIMETR PKWY BLDG 200 STE 105,STE 105,AUGUSTA,GA
+                if let Some(idx) = adrs[idx].address1.find("BLDG") {
+                    adrs[idx].address2 = Some(adrs[idx].address1[idx..].to_string());
+                    adrs[idx].address1.truncate(idx - 1); // truncate extra space
+                }
+                // 685 CARNEGIE DR STE 100,,SAN BERNARDINO,CA,92408-3581
+                else if let Some(idx) = adrs[idx].address1.find("STE") {
+                    adrs[idx].address2 = Some(adrs[idx].address1[idx..].to_string());
+                    adrs[idx].address1.truncate(idx - 1); // truncate extra space
+                }
+            }
+            Err(err) => {
+                eprintln!("standardize_addresses: err: {}", err);
+                // Mitigate failed address standardization.
+                // Some non-addresses may be removed here.
+                // INVALID ADDRESSES
+                // https://amodei.house.gov/
+                // Address { first_name: "Mark", last_name: "Amodei", address1: "89511", address2: Some("Elko Contact"), city: "Elko", state: "NV", zip: "89801" }
+                if adrs[idx].zip == "89801" {
+                    eprintln!("removed invalid address: {:?}", adrs[idx]);
+                    adrs.remove(idx);
+                } else {
+                    return Err(err);
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-fn write_addresses_to_csv<P: AsRef<Path>>(path: P, adrs: &[Address]) -> Result<()> {
+pub fn write_addresses_to_csv<P: AsRef<Path>>(path: P, adrs: &[Address]) -> Result<()> {
     eprintln!("Writing CSV file...");
     let file = File::create(path)?;
     let mut wtr = Writer::from_writer(file);
@@ -714,8 +822,170 @@ fn write_addresses_to_csv<P: AsRef<Path>>(path: P, adrs: &[Address]) -> Result<(
 
 // A US House of Representative.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct House {
-    first_name: String,
-    last_name: String,
-    url: String,
+pub struct House {
+    pub first_name: String,
+    pub last_name: String,
+    pub url: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trim_list_prefix() {
+        let mut lines = vec![
+            "2312 RAYBURN HOUSE OFFICE BUILDING".to_string(),
+            "2430 RAYBURN HOUSE OFFICE BLDG.".to_string(),
+            "SOME OTHER LINE".to_string(),
+        ];
+        edit_hob(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "2312 RAYBURN HOB".to_string(),
+                "2430 RAYBURN HOB".to_string(),
+                "SOME OTHER LINE".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_concat_two() {
+        let mut lines = vec![
+            "1107 LONGWORTH HOUSE".to_string(),
+            "OFFICE BUILDING".to_string(),
+            "SOME OTHER LINE".to_string(),
+        ];
+        edit_hob(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "1107 LONGWORTH HOB".to_string(),
+                "SOME OTHER LINE".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hob_abbreviation() {
+        let mut lines = vec![
+            "1119 LONGWORTH H.O.B.".to_string(),
+            "ANOTHER LINE".to_string(),
+        ];
+        edit_hob(&mut lines);
+        assert_eq!(
+            lines,
+            vec!["1119 LONGWORTH HOB".to_string(), "ANOTHER LINE".to_string(),]
+        );
+    }
+
+    #[test]
+    fn test_insert_room_number() {
+        let mut lines = vec!["LONGWORTH HOB".to_string(), "ROOM 1027".to_string()];
+        edit_hob(&mut lines);
+        assert_eq!(lines, vec!["1027 LONGWORTH HOB".to_string(),]);
+    }
+
+    #[test]
+    fn test_no_modification_needed() {
+        let mut lines = vec![
+            "SOME RANDOM ADDRESS".to_string(),
+            "ANOTHER LINE".to_string(),
+        ];
+        edit_hob(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "SOME RANDOM ADDRESS".to_string(),
+                "ANOTHER LINE".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_single_split() {
+        let mut lines = vec![
+            "WELLS FARGO PLAZA | 221 N. KANSAS STREET | SUITE 1500".to_string(),
+            "EL PASO, TX 79901 |".to_string(),
+        ];
+        edit_split_bar(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "WELLS FARGO PLAZA".to_string(),
+                "221 N. KANSAS STREET".to_string(),
+                "SUITE 1500".to_string(),
+                "EL PASO, TX 79901".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_no_split() {
+        let mut lines = vec!["123 MAIN STREET".to_string(), "SUITE 500".to_string()];
+        edit_split_bar(&mut lines);
+        assert_eq!(
+            lines,
+            vec!["123 MAIN STREET".to_string(), "SUITE 500".to_string(),]
+        );
+    }
+
+    #[test]
+    fn test_multiple_splits() {
+        let mut lines = vec![
+            "PART 1 | PART 2 | PART 3".to_string(),
+            "PART A | PART B | PART C".to_string(),
+        ];
+        edit_split_bar(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "PART 1".to_string(),
+                "PART 2".to_string(),
+                "PART 3".to_string(),
+                "PART A".to_string(),
+                "PART B".to_string(),
+                "PART C".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_edge_case_trailing_bar() {
+        let mut lines = vec!["TRAILING BAR |".to_string(), "| LEADING BAR".to_string()];
+        edit_split_bar(&mut lines);
+        assert_eq!(
+            lines,
+            vec!["TRAILING BAR".to_string(), "LEADING BAR".to_string(),]
+        );
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let mut lines = vec!["".to_string()];
+        edit_split_bar(&mut lines);
+        assert_eq!(lines, vec!["".to_string(),]);
+    }
+
+    #[test]
+    fn test_mixed_content() {
+        let mut lines = vec![
+            "MIXED CONTENT | 123 | ABC".to_string(),
+            "NORMAL LINE".to_string(),
+            "ANOTHER | LINE".to_string(),
+        ];
+        edit_split_bar(&mut lines);
+        assert_eq!(
+            lines,
+            vec![
+                "MIXED CONTENT".to_string(),
+                "123".to_string(),
+                "ABC".to_string(),
+                "NORMAL LINE".to_string(),
+                "ANOTHER".to_string(),
+                "LINE".to_string(),
+            ]
+        );
+    }
 }
