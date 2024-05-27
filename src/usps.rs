@@ -7,8 +7,8 @@ use usps_oauth_sdk::apis::configuration::Configuration as CfgAuth;
 use usps_oauth_sdk::apis::default_api::post_token;
 use usps_oauth_sdk::models::InlineResponse2001::ProviderAccessTokenResponse;
 
-pub const CLIENT_KEY: &str = "USPS_CLIENT_KEY";
-pub const CLIENT_SECRET: &str = "USPS_CLIENT_SECRET";
+const CLIENT_KEY: &str = "USPS_CLIENT_KEY";
+const CLIENT_SECRET: &str = "USPS_CLIENT_SECRET";
 
 #[derive(Default)]
 pub struct UspsClient {
