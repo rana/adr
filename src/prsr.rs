@@ -7,12 +7,15 @@ pub struct Prsr {
     /// A regex matching a floating point number.
     // "46.86551919465073", "-96.83144324414937"
     pub re_flt: Regex,
+    /// A regex matching initials in a name.
+    pub re_name_initials: Regex,
 }
 
 impl Prsr {
     pub fn new() -> Self {
         Prsr {
             re_flt: Regex::new(r"^-?\d+\.\d+$").unwrap(),
+            re_name_initials: Regex::new(r"\b[A-Z]\.\s+").unwrap(),
         }
     }
 
@@ -35,7 +38,14 @@ impl Prsr {
         edit_split_city_state_zip(lnes);
         edit_disjoint_zip(lnes);
         edit_drain_after_last_zip(lnes);
-        edit_dc(lnes);
+        edit_dot(lnes);
+    }
+
+    pub fn remove_initials(&self, full_name: &str) -> String {
+        // Define the regular expression to match initials
+        let re = Regex::new(r"\b[A-Z]\.\s+").unwrap();
+        // Replace the initials with an empty string
+        self.re_name_initials.replace_all(full_name, "").to_string()
     }
 }
 
@@ -86,6 +96,9 @@ pub fn parse_addresses(per: &Person, lnes: &[String]) -> Option<Vec<Address>> {
     // Deduplicate extracted addresses.
     adrs.sort_unstable();
     adrs.dedup_by(|a, b| a == b);
+    // adrs.reverse();
+    // adrs.retain(|v| v.city == "DAYTON");
+    // adrs[0].zip = "77535".into();
 
     eprintln!("{} addresses parsed.", adrs.len());
 
@@ -123,7 +136,7 @@ pub async fn standardize_addresses(
     for idx in (0..adrs.len()).rev() {
         match cli_usps.standardize_address(&mut adrs[idx]).await {
             Ok(_) => {
-                // Edit cases:
+                // Edit edge cases:
                 // 2743 PERIMETR PKWY BLDG 200 STE 105,STE 105,AUGUSTA,GA
                 if let Some(idx_fnd) = adrs[idx].address1.find("BLDG") {
                     adrs[idx].address2 = Some(adrs[idx].address1[idx_fnd..].to_string());
@@ -264,15 +277,29 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
     }
 }
 
-pub fn edit_dc(lnes: &mut [String]) {
-    // Transform "D.C." -> "DC"
-    for (idx, lne) in lnes.iter().enumerate() {
-        if lne == "DC" {
-            break;
+pub fn edit_dot(lnes: &mut [String]) {
+    // Remove dots.
+    // "D.C." -> "DC"
+    // "2004 N. CLEVELAND ST." -> "2004 N CLEVELAND ST"
+    for lne in lnes.iter_mut() {
+        if lne.contains('.') {
+            *lne = lne.replace('.', "");
         }
-        if lne == "D.C." {
-            lnes[idx] = "DC".to_string();
-            break;
+    }
+}
+
+pub fn edit_title_military(lnes: &mut [String]) {
+    // Remove dots.
+    // "DR. WILLIAM" -> "WILLIAM"
+    // "GENERAL CHARLES" -> "CHARLES"
+    // "ADMIRAL CHRISTOPHER" -> "CHRISTOPHER"
+    for lne in lnes.iter_mut() {
+        if lne.starts_with("DR. ") {
+            *lne = lne.replace("DR. ", "");
+        } else if lne.starts_with("GENERAL ") {
+            *lne = lne.replace("GENERAL ", "");
+        } else if lne.starts_with("ADMIRAL ") {
+            *lne = lne.replace("ADMIRAL ", "");
         }
     }
 }
@@ -308,6 +335,16 @@ pub fn has_lne_zip(lnes: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_remove_initials() {
+        let prsr = Prsr::new();
+        assert_eq!(prsr.remove_initials("MICKEY J. MOUSE"), "MICKEY MOUSE");
+        assert_eq!(prsr.remove_initials("JOHN R. SMITH"), "JOHN SMITH");
+        assert_eq!(prsr.remove_initials("B. ALICE WALKER"), "ALICE WALKER");
+        assert_eq!(prsr.remove_initials("A. B. C. D."), "D."); // Test with multiple initials
+        assert_eq!(prsr.remove_initials("J. K. ROWLING"), "ROWLING"); // Test with multiple initials in sequence
+    }
 
     #[test]
     fn test_trim_list_prefix() {

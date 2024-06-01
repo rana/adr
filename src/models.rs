@@ -25,6 +25,8 @@ impl fmt::Display for Role {
 pub struct Person {
     pub name_fst: String,
     pub name_lst: String,
+    pub title1: String,
+    pub title2: String,
     pub url: String,
     pub adrs: Option<Vec<Address>>,
 }
@@ -42,7 +44,7 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}, {}, {}, {}, {}",
+            "{},{},{},{},{}",
             self.address1,
             self.address2.as_deref().unwrap_or(""),
             self.city,
@@ -58,9 +60,9 @@ impl fmt::Display for AddressList {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (i, address) in self.0.iter().enumerate() {
             if i != 0 {
-                write!(f, "\n")?;
+                writeln!(f)?;
             }
-            write!(f, "{}", address)?;
+            write!(f, "  {}", address)?;
         }
         Ok(())
     }

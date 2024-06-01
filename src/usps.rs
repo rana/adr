@@ -1,5 +1,6 @@
 use crate::models::Address;
 use anyhow::{anyhow, Result};
+use reqwest::StatusCode;
 use std::env;
 use usps_addresses_sdk::apis::configuration::Configuration as CfgAdr;
 use usps_addresses_sdk::apis::resources_api::get_address;
@@ -65,7 +66,7 @@ impl UspsClient {
         }
     }
     pub async fn standardize_address(&mut self, adr: &mut Address) -> Result<()> {
-        eprintln!("adr:{adr:?}");
+        // eprintln!("adr:{adr:?}");
         // Fetch access token as needed.
         if self.cfg_adr.is_none() {
             // WARNING: TOKEN REFRESH SCENARIO NOT HANDLED.
@@ -85,7 +86,7 @@ impl UspsClient {
         .await
         {
             Ok(res) => {
-                eprintln!("standardize_address:{res:?}");
+                eprintln!("std:{res:?}");
                 if let Some(adr_std) = res.address {
                     if let Some(address1) = adr_std.street_address {
                         adr.address1 = address1;
@@ -104,13 +105,24 @@ impl UspsClient {
                         adr.zip.push('-');
                         adr.zip.push_str(zip4.as_str());
                     }
-                    eprintln!("standardize_address:{adr:?}");
+                    eprintln!("  {adr}");
                     Ok(())
                 } else {
                     Err(anyhow!("usps: response missing address"))
                 }
             }
-            Err(err) => Err(err.into()),
+            Err(err) => {
+                eprintln!("std:err:{adr:?}");
+                eprintln!("std:err:{err:?}");
+                // use usps_oauth_sdk::apis::Error::ResponseError;
+                // use usps_oauth_sdk::apis::ResponseContent;
+                if let usps_addresses_sdk::apis::Error::ResponseError(ref inr) = err {
+                    if inr.status == StatusCode::BAD_REQUEST {
+                        // TODO: try get address without zip code.
+                    }
+                }
+                Err(err.into())
+            }
         }
     }
 }
