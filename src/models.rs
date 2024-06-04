@@ -1,8 +1,7 @@
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::default;
 use std::fmt;
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
@@ -40,6 +39,15 @@ pub struct Address {
     pub state: String,
     pub zip: String,
 }
+impl Address {
+    pub fn is_valid(&self) -> bool {
+        self.address1.len() <= 40
+            && self.address2.as_ref().map_or(true, |s| s.len() <= 40)
+            && self.city.len() <= 40
+            && self.state.len() <= 2 // USPS state abbreviations are always 2 characters
+            && self.zip.len() <= 10 // ZIP code can be 5 or 9 digits (with hyphen)
+    }
+}
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -67,3 +75,4 @@ impl fmt::Display for AddressList {
         Ok(())
     }
 }
+

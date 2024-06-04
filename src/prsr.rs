@@ -9,6 +9,10 @@ pub struct Prsr {
     pub re_flt: Regex,
     /// A regex matching initials in a name.
     pub re_name_initials: Regex,
+    /// A US state or territory according to the USPS.
+    pub re_us_state: Regex,
+    /// A regex match a zip code with 5 digits or 9 digits.
+    pub re_zip: Regex,
 }
 
 impl Prsr {
@@ -16,6 +20,8 @@ impl Prsr {
         Prsr {
             re_flt: Regex::new(r"^-?\d+\.\d+$").unwrap(),
             re_name_initials: Regex::new(r"\b[A-Z]\.\s+").unwrap(),
+            re_us_state:Regex::new(r"^(AL|AK|AS|AZ|AR|CA|CO|CT|DE|DC|FM|FL|GA|GU|HI|ID|IL|IN|IA|KS|KY|LA|ME|MH|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|MP|OH|OK|OR|PW|PA|PR|RI|SC|SD|TN|TX|UT|VT|VI|VA|WA|WV|WI|WY|AA|AE|AP)$").unwrap(),
+            re_zip: Regex::new(r"^\d{5}(-\d{4})?$").unwrap(),
         }
     }
 
@@ -35,6 +41,7 @@ impl Prsr {
     pub fn edit_lnes(&self, lnes: &mut Vec<String>) {
         // Edit lines to make it easier to parse.
         edit_split_bar(lnes);
+        self.edit_concat_zip(lnes);
         edit_split_city_state_zip(lnes);
         edit_disjoint_zip(lnes);
         edit_drain_after_last_zip(lnes);
@@ -47,66 +54,79 @@ impl Prsr {
         // Replace the initials with an empty string
         self.re_name_initials.replace_all(full_name, "").to_string()
     }
-}
 
-pub fn parse_addresses(per: &Person, lnes: &[String]) -> Option<Vec<Address>> {
-    // eprintln!("--- parse_addresses: {lnes:?}");
+    pub fn parse_addresses(&self, per: &Person, lnes: &[String]) -> Option<Vec<Address>> {
+        // eprintln!("--- parse_addresses: {lnes:?}");
 
-    // Start from the bottom.
-    // Search for a five digit zip code.
-    let mut adrs: Vec<Address> = Vec::new();
-    const LEN_ZIP: usize = 5;
-    for (idx, lne) in lnes.iter().enumerate().rev() {
-        if lne.len() == LEN_ZIP && ends_with_5digits(lne) {
-            // eprintln!("-- parse_addresses: idx:{idx}");
-            // Start of an address.
-            let mut adr = Address::default();
-            adr.zip.clone_from(lne);
-            adr.state.clone_from(&lnes[idx - 1]);
-            adr.city.clone_from(&lnes[idx - 2]);
+        // Start from the bottom.
+        // Search for a five digit zip code.
+        let mut adrs: Vec<Address> = Vec::new();
+        for (idx, lne) in lnes.iter().enumerate().rev() {
+            if self.re_zip.is_match(lne) {
+                // eprintln!("-- parse_addresses: idx:{idx}");
+                // Start of an address.
+                let mut adr = Address::default();
+                adr.zip.clone_from(lne);
+                adr.state.clone_from(&lnes[idx - 1]);
+                adr.city.clone_from(&lnes[idx - 2]);
 
-            // Look for address1.
-            // Next line could be address1 or address2.
-            // Two lines away starts with a digit?
-            let mut has_address2 = false;
-            if idx >= 4 {
-                if let Some(idx) = lnes[idx - 4].find(|c: char| c.is_ascii_digit()) {
-                    has_address2 = idx == 0;
+                // Look for address1.
+                // Next line could be address1 or address2.
+                // Two lines away starts with a digit?
+                let mut has_address2 = false;
+                if idx >= 4 && !self.re_zip.is_match(&lnes[idx - 4]) {
+                    if let Some(idx) = lnes[idx - 4].find(|c: char| c.is_ascii_digit()) {
+                        has_address2 = idx == 0;
+                    }
                 }
-            }
-            if has_address2 {
-                adr.address2 = Some(lnes[idx - 3].clone());
-                adr.address1.clone_from(&lnes[idx - 4]);
-            } else {
-                // Check for edge cases:
-                //  "U.S. Federal Building, 220 E Rosser Avenue", "Room 228", "Bismarck,", "ND", "58501"
-                if adr.zip == "58501" {
-                    let vals: Vec<&str> = lnes[idx - 4].split_terminator(',').collect();
-                    adr.address1 = vals[1].trim().to_string();
-                    adr.address2 = Some(format!("{} {}", vals[0].trim(), lnes[idx - 3]));
+                if has_address2 {
+                    adr.address2 = Some(lnes[idx - 3].clone());
+                    adr.address1.clone_from(&lnes[idx - 4]);
                 } else {
-                    // Standard case.
-                    adr.address1.clone_from(&lnes[idx - 3]);
+                    // Check for edge cases:
+                    //  "U.S. Federal Building, 220 E Rosser Avenue", "Room 228", "Bismarck,", "ND", "58501"
+                    if adr.zip == "58501" {
+                        let vals: Vec<&str> = lnes[idx - 4].split_terminator(',').collect();
+                        adr.address1 = vals[1].trim().to_string();
+                        adr.address2 = Some(format!("{} {}", vals[0].trim(), lnes[idx - 3]));
+                    } else {
+                        // Standard case.
+                        adr.address1.clone_from(&lnes[idx - 3]);
+                    }
                 }
+                adrs.push(adr);
             }
-            adrs.push(adr);
+        }
+
+        // Deduplicate extracted addresses.
+        adrs.sort_unstable();
+        adrs.dedup_by(|a, b| a == b);
+        // adrs.reverse();
+        // adrs.retain(|v| v.city == "DAYTON");
+        // adrs[0].zip = "77535".into();
+
+        eprintln!("{} addresses parsed.", adrs.len());
+
+        if adrs.is_empty() {
+            return None;
+        }
+
+        Some(adrs)
+    }
+
+    pub fn edit_concat_zip(&self, lnes: &mut Vec<String>) {
+        // Concat single zip code for later parsing.
+        // "355 S. WASHINGTON ST, SUITE 210, DANVILLE, IN", "46122" ->
+        // "355 S. WASHINGTON ST, SUITE 210, DANVILLE, IN 46122"
+        for idx in (1..lnes.len()).rev() {
+            let lne = lnes[idx].clone();
+            if self.re_zip.is_match(&lne) {
+                lnes[idx - 1].push(' ');
+                lnes[idx - 1].push_str(&lne);
+                lnes.remove(idx);
+            }
         }
     }
-
-    // Deduplicate extracted addresses.
-    adrs.sort_unstable();
-    adrs.dedup_by(|a, b| a == b);
-    // adrs.reverse();
-    // adrs.retain(|v| v.city == "DAYTON");
-    // adrs[0].zip = "77535".into();
-
-    eprintln!("{} addresses parsed.", adrs.len());
-
-    if adrs.is_empty() {
-        return None;
-    }
-
-    Some(adrs)
 }
 
 pub fn validate_addresses(per: &Person, adrs: &[Address]) -> Result<()> {
@@ -123,50 +143,6 @@ pub fn validate_addresses(per: &Person, adrs: &[Address]) -> Result<()> {
         }
         if adr.zip.is_empty() {
             return Err(anyhow!("address: zip empty {:?}", adr));
-        }
-    }
-
-    Ok(())
-}
-
-pub async fn standardize_addresses(
-    adrs: &mut Vec<Address>,
-    cli_usps: &mut UspsClient,
-) -> Result<()> {
-    for idx in (0..adrs.len()).rev() {
-        match cli_usps.standardize_address(&mut adrs[idx]).await {
-            Ok(_) => {
-                // Edit edge cases:
-                // 2743 PERIMETR PKWY BLDG 200 STE 105,STE 105,AUGUSTA,GA
-                if let Some(idx_fnd) = adrs[idx].address1.find("BLDG") {
-                    adrs[idx].address2 = Some(adrs[idx].address1[idx_fnd..].to_string());
-                    adrs[idx].address1.truncate(idx_fnd - 1); // truncate extra space
-                }
-                // 685 CARNEGIE DR STE 100,,SAN BERNARDINO,CA
-                else if let Some(idx_fnd) = adrs[idx].address1.find("STE") {
-                    adrs[idx].address2 = Some(adrs[idx].address1[idx_fnd..].to_string());
-                    adrs[idx].address1.truncate(idx_fnd - 1); // truncate extra space
-                }
-                // 1070 MAIN ST UNIT 300,,PAWTUCKET,RI
-                else if let Some(idx_fnd) = adrs[idx].address1.find("UNIT") {
-                    adrs[idx].address2 = Some(adrs[idx].address1[idx_fnd..].to_string());
-                    adrs[idx].address1.truncate(idx_fnd - 1); // truncate extra space
-                }
-            }
-            Err(err) => {
-                eprintln!("standardize_addresses: err: {}", err);
-                // Mitigate failed address standardization.
-                // Some non-addresses may be removed here.
-                // INVALID ADDRESSES
-                // https://amodei.house.gov/
-                // Address { first_name: "Mark", last_name: "Amodei", address1: "89511", address2: Some("Elko Contact"), city: "Elko", state: "NV", zip: "89801" }
-                if adrs[idx].zip == "89801" {
-                    eprintln!("removed invalid address: {:?}", adrs[idx]);
-                    adrs.remove(idx);
-                } else {
-                    return Err(err);
-                }
-            }
         }
     }
 
@@ -194,9 +170,7 @@ pub fn edit_split_city_state_zip(lnes: &mut Vec<String>) {
     // "Syracuse, NY  13202"
     // "2303 Rayburn House Office Building, Washington, DC 20515"
     for idx in (0..lnes.len()).rev() {
-        // Skip maps coordinates
-        // "32.95129530802494", "-96.73322662705269"
-        if lnes[idx].len() > 5 && !lnes[idx].contains('.') && ends_with_5digits(&lnes[idx]) {
+        if lnes[idx].len() > 5 && ends_with_5digits(&lnes[idx]) {
             let mut lne = lnes[idx].clone();
             lnes.remove(idx);
 

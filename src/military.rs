@@ -56,8 +56,8 @@ impl Military {
                 // Validate members fields.
                 military.validate_members()?;
 
-                // // Standardize addresses.
-                // military.standardize_addresses().await?;
+                // Standardize addresses.
+                military.standardize_addresses().await?;
 
                 // eprintln!("{:?}", military);
 
@@ -131,10 +131,10 @@ impl Military {
     }
 
     pub async fn standardize_addresses(&mut self) -> Result<()> {
-        let mut cli_usps = UspsClient::new();
+        let mut cli = &Client::new();
         for per in self.persons.iter_mut() {
             let mut adrs = per.adrs.as_mut().unwrap();
-            standardize_addresses(adrs, &mut cli_usps).await?;
+            standardize_addresses(adrs, cli).await?;
             eprintln!("  {}", adrs[0]);
         }
 

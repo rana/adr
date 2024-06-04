@@ -22,6 +22,7 @@ pub struct House {
 impl House {
     pub fn new() -> Self {
         // The total number of members in the U.S. House of Representatives is 441. This includes 435 voting members who represent the 50 states and 6 non-voting members who represent the District of Columbia, Puerto Rico, and four other U.S. territories (American Samoa, Guam, the Northern Mariana Islands, and the U.S. Virgin Islands).
+        // Some members may be vacant.
         Self {
             name: "U.S. House of Representatives".into(),
             role: Role::Political,
@@ -129,53 +130,61 @@ impl House {
 
     pub async fn fetch_addresses(&mut self) -> Result<()> {
         let cli = &Client::new();
-        let mut cli_usps = UspsClient::new();
         let prsr = &Prsr::new();
 
         // Clone self before iterating over self.persons to avoid borrowing conflicts.
         // For checkpoint saving.
         let mut self_clone = self.clone();
 
-        for (idx, per) in self.persons.iter_mut().enumerate() {
-            if per.adrs.is_none() {
-                // Fetch addresses as Vec<String>.
-                let mut adr_lnes_o = fetch_address_lnes(per, "contact", cli, prsr).await?;
+        for (idx, per) in self
+            .persons
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, per)| per.adrs.is_none())
+            .take(1)
+        {
+            eprintln!(" -- idx:{} {} {}", idx, per.name_fst, per.name_lst);
+
+            // Fetch addresses as Vec<String>.
+            let mut adr_lnes_o = fetch_address_lnes(per, "contact", cli, prsr).await?;
+            if adr_lnes_o.is_none() {
+                adr_lnes_o = fetch_address_lnes(per, "contact/offices", cli, prsr).await?;
                 if adr_lnes_o.is_none() {
-                    adr_lnes_o = fetch_address_lnes(per, "contact/offices", cli, prsr).await?;
+                    adr_lnes_o =
+                        fetch_address_lnes(per, "contact/office-locations", cli, prsr).await?;
                     if adr_lnes_o.is_none() {
-                        adr_lnes_o =
-                            fetch_address_lnes(per, "contact/office-locations", cli, prsr).await?;
+                        adr_lnes_o = fetch_address_lnes(per, "offices", cli, prsr).await?;
                     }
                 }
+            }
 
-                // Parse lines to Addresses.
-                match adr_lnes_o {
-                    None => {
-                        return Err(anyhow!("house: missing address lines ({:?})", per));
-                    }
-                    Some(adr_lnes) => {
-                        match parse_addresses(per, &adr_lnes) {
-                            None => {
-                                return Err(anyhow!("house: no addresses parsed for {:?}", per));
-                            }
-                            Some(mut adrs) => {
-                                // Validate addresses for current representative.
-                                validate_addresses(per, &adrs)?;
+            // Parse lines to Addresses.
+            match adr_lnes_o {
+                None => {
+                    return Err(anyhow!("house: missing address lines ({:?})", per));
+                }
+                Some(adr_lnes) => {
+                    match prsr.parse_addresses(per, &adr_lnes) {
+                        None => {
+                            return Err(anyhow!("house: no addresses parsed for {:?}", per));
+                        }
+                        Some(mut adrs) => {
+                            // Validate addresses for current representative.
+                            validate_addresses(per, &adrs)?;
 
-                                eprintln!("{}", AddressList(adrs.clone()));
+                            eprintln!("{}", AddressList(adrs.clone()));
 
-                                standardize_addresses(&mut adrs, &mut cli_usps).await?;
+                            standardize_addresses(&mut adrs, cli).await?;
 
-                                // Write intermediate results to file.
-                                // Clone adrs for checkpoint save.
-                                let adrs_clone = adrs.clone();
-                                self_clone.persons[idx].adrs = Some(adrs_clone);
-                                write_to_file(&self_clone, FLE_PTH)?;
+                            // Write intermediate results to file.
+                            // Clone adrs for checkpoint save.
+                            let adrs_clone = adrs.clone();
+                            self_clone.persons[idx].adrs = Some(adrs_clone);
+                            write_to_file(&self_clone, FLE_PTH)?;
 
-                                // eprintln!("{adrs:?}");
+                            eprintln!("{}", AddressList(adrs.clone()));
 
-                                per.adrs = Some(adrs);
-                            }
+                            per.adrs = Some(adrs);
                         }
                     }
                 }

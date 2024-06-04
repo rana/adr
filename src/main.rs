@@ -17,10 +17,10 @@ use usps::*;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let mut military = Military::load().await?;
+    // let mut military = Military::load().await?;
 
-    // let mut house = House::load().await?;
-    // house.fetch_addresses().await?;
+    let mut house = House::load().await?;
+    house.fetch_addresses().await?;
 
     Ok(())
 }
