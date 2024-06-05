@@ -143,49 +143,26 @@ impl House {
             .filter(|(_, per)| per.adrs.is_none())
             .take(1)
         {
-            eprintln!(" -- idx:{} {} {}", idx, per.name_fst, per.name_lst);
+            eprintln!("  {} {} {} {}", idx, per.name_fst, per.name_lst, per.url);
 
-            // Fetch addresses as Vec<String>.
-            let mut adr_lnes_o = fetch_address_lnes(per, "contact", cli, prsr).await?;
-            if adr_lnes_o.is_none() {
-                adr_lnes_o = fetch_address_lnes(per, "contact/offices", cli, prsr).await?;
-                if adr_lnes_o.is_none() {
-                    adr_lnes_o =
-                        fetch_address_lnes(per, "contact/office-locations", cli, prsr).await?;
-                    if adr_lnes_o.is_none() {
-                        adr_lnes_o = fetch_address_lnes(per, "offices", cli, prsr).await?;
-                    }
-                }
-            }
-
-            // Parse lines to Addresses.
-            match adr_lnes_o {
-                None => {
-                    return Err(anyhow!("house: missing address lines ({:?})", per));
-                }
-                Some(adr_lnes) => {
-                    match prsr.parse_addresses(per, &adr_lnes) {
-                        None => {
-                            return Err(anyhow!("house: no addresses parsed for {:?}", per));
-                        }
-                        Some(mut adrs) => {
-                            // Validate addresses for current representative.
-                            validate_addresses(per, &adrs)?;
-
-                            eprintln!("{}", AddressList(adrs.clone()));
-
-                            standardize_addresses(&mut adrs, cli).await?;
-
-                            // Write intermediate results to file.
-                            // Clone adrs for checkpoint save.
-                            let adrs_clone = adrs.clone();
-                            self_clone.persons[idx].adrs = Some(adrs_clone);
-                            write_to_file(&self_clone, FLE_PTH)?;
-
-                            eprintln!("{}", AddressList(adrs.clone()));
-
-                            per.adrs = Some(adrs);
-                        }
+            // Fetch addresses into person.
+            let mut has_adrs =
+                fetch_addresses(&mut self_clone, idx, per, "contact", cli, prsr).await?;
+            if !has_adrs {
+                has_adrs = fetch_addresses(&mut self_clone, idx, per, "contact/offices", cli, prsr)
+                    .await?;
+                if !has_adrs {
+                    has_adrs = fetch_addresses(
+                        &mut self_clone,
+                        idx,
+                        per,
+                        "contact/office-locations",
+                        cli,
+                        prsr,
+                    )
+                    .await?;
+                    if !has_adrs {
+                        fetch_addresses(&mut self_clone, idx, per, "offices", cli, prsr).await?;
                     }
                 }
             }
@@ -193,6 +170,48 @@ impl House {
 
         Ok(())
     }
+}
+
+pub async fn fetch_addresses(
+    self_clone: &mut House,
+    idx: usize,
+    per: &mut Person,
+    url_path: &str,
+    cli: &Client,
+    prsr: &Prsr,
+) -> Result<bool> {
+    let mut adr_lnes_o = fetch_address_lnes(per, url_path, cli, prsr).await?;
+
+    // Parse lines to Addresses.
+    match adr_lnes_o {
+        None => return Ok(false),
+        Some(adr_lnes) => {
+            match prsr.parse_addresses(per, &adr_lnes) {
+                None => return Ok(false),
+                Some(mut adrs) => {
+                    filter_invalid_addresses(per, &mut adrs);
+
+                    validate_addresses(per, &adrs)?;
+
+                    eprintln!("{}", AddressList(adrs.clone()));
+
+                    standardize_addresses(&mut adrs, cli).await?;
+
+                    // Write intermediate results to file.
+                    // Clone adrs for checkpoint save.
+                    let adrs_clone = adrs.clone();
+                    self_clone.persons[idx].adrs = Some(adrs_clone);
+                    write_to_file(&self_clone, FLE_PTH)?;
+
+                    eprintln!("{}", AddressList(adrs.clone()));
+
+                    per.adrs = Some(adrs);
+                }
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 pub async fn fetch_address_lnes(
@@ -223,7 +242,7 @@ pub async fn fetch_address_lnes(
             // Get lines and filter.
             let cur_lnes = elm
                 .text()
-                .map(|s| s.trim().to_uppercase().to_string())
+                .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
                 .filter(|s| prsr.filter(s))
                 .collect::<Vec<String>>();
 

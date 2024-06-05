@@ -9,10 +9,16 @@ pub struct Prsr {
     pub re_flt: Regex,
     /// A regex matching initials in a name.
     pub re_name_initials: Regex,
-    /// A US state or territory according to the USPS.
+    /// A regex matching abbreviations of US states or US territories according to the USPS.
     pub re_us_state: Regex,
-    /// A regex match a zip code with 5 digits or 9 digits.
+    /// A regex matching USPS zip codes with 5 digits or 9 digits.
     pub re_zip: Regex,
+    /// A regex matching US phone numbers.
+    pub re_phone: Regex,
+    /// A regex matching an address line 1.
+    pub re_address1: Regex,
+    /// A regex matching a PO Box.
+    pub re_po_box: Regex,
 }
 
 impl Prsr {
@@ -22,7 +28,32 @@ impl Prsr {
             re_name_initials: Regex::new(r"\b[A-Z]\.\s+").unwrap(),
             re_us_state:Regex::new(r"^(AL|AK|AS|AZ|AR|CA|CO|CT|DE|DC|FM|FL|GA|GU|HI|ID|IL|IN|IA|KS|KY|LA|ME|MH|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|MP|OH|OK|OR|PW|PA|PR|RI|SC|SD|TN|TX|UT|VT|VI|VA|WA|WV|WI|WY|AA|AE|AP)$").unwrap(),
             re_zip: Regex::new(r"^\d{5}(-\d{4})?$").unwrap(),
-        }
+            re_phone: Regex::new(r"(?x)
+                (?:\+1[-.\s]?)?                # Optional country code
+                (?:\(?\d{3}\)?[-.\s]?)?        # Area code with optional parentheses and separator
+                \d{3}[-.\s]?                   # First three digits with optional separator
+                \d{4}                          # Last four digits
+            ").unwrap(),
+            re_address1: Regex::new(r"(?ix)
+            ^                        # Start of string
+            (                        # Start of group
+                PO \s* BOX           # Match 'PO BOX' with optional spaces
+                |                    # OR
+                \d+                  # One or more digits at the beginning
+            )                        # End of group
+            .*                       # Any characters (including none) in between
+            [A-Za-z]                 # At least one letter somewhere in the string
+            .*                       # Any characters (including none) after the letter
+            $                        # End of string
+        ").unwrap(),
+        re_po_box: Regex::new(r"(?ix)
+            ^                # Start of string
+            P \s* \.? \s* O \s* \.? \s* BOX  # Match 'P.O. BOX', 'PO BOX', 'P.O.BOX', 'POBOX' with optional spaces and periods
+            \s+              # At least one space after 'PO BOX'
+            \d+              # One or more digits
+            $                # End of string
+        ").unwrap(),
+            }
     }
 
     pub fn filter(&self, s: &str) -> bool {
@@ -31,11 +62,12 @@ impl Prsr {
             && !s.contains("FUNCTION")
             && !s.contains("FORM")
             && !s.contains("!IMPORTANT;")
-            && !s.starts_with('(')
+            && !self.re_phone.is_match(s)
+            && !self.re_flt.is_match(s)
             && !s.contains("PHONE:")
             && !s.contains("FAX:")
+            && !s.contains("OFFICE OF")
             && !(s.contains("AM") && s.contains("PM") && s.contains("TO"))
-            && !self.re_flt.is_match(s)
     }
 
     pub fn edit_lnes(&self, lnes: &mut Vec<String>) {
@@ -46,6 +78,8 @@ impl Prsr {
         edit_disjoint_zip(lnes);
         edit_drain_after_last_zip(lnes);
         edit_dot(lnes);
+        edit_single_comma(lnes);
+        edit_split_comma(lnes);
     }
 
     pub fn remove_initials(&self, full_name: &str) -> String {
@@ -68,34 +102,49 @@ impl Prsr {
                 let mut adr = Address::default();
                 adr.zip.clone_from(lne);
                 adr.state.clone_from(&lnes[idx - 1]);
-                adr.city.clone_from(&lnes[idx - 2]);
+                let idx_city = idx - 2;
+                adr.city.clone_from(&lnes[idx_city]);
 
-                // Look for address1.
+                // Address1.
+                // Starts with digit and contains letter.
                 // Next line could be address1 or address2.
-                // Two lines away starts with a digit?
-                let mut has_address2 = false;
-                if idx >= 4 && !self.re_zip.is_match(&lnes[idx - 4]) {
-                    if let Some(idx) = lnes[idx - 4].find(|c: char| c.is_ascii_digit()) {
-                        has_address2 = idx == 0;
-                    }
+                // ["610 MAIN STREET","FIRST FLOOR SMALL","CONFERENCE ROOM","JASPER","IN","47547"]
+                // 1710 ALABAMA AVENUE,247 CARL ELLIOTT BUILDING,JASPER,AL,35501
+                // PO BOX 729,SUITE # I-10,BELTON,TX,76513
+                let mut idx_adr1 = idx - 3;
+                while idx_adr1 != usize::MAX
+                    && !(lnes[idx_adr1].ends_with("BUILDING")
+                        || self.re_address1.is_match(&lnes[idx_adr1])
+                        || self.re_po_box.is_match(&lnes[idx_adr1]))
+                {
+                    idx_adr1 = idx_adr1.wrapping_sub(1);
                 }
-                if has_address2 {
-                    adr.address2 = Some(lnes[idx - 3].clone());
-                    adr.address1.clone_from(&lnes[idx - 4]);
-                } else {
-                    // Check for edge cases:
-                    //  "U.S. Federal Building, 220 E Rosser Avenue", "Room 228", "Bismarck,", "ND", "58501"
-                    if adr.zip == "58501" {
-                        let vals: Vec<&str> = lnes[idx - 4].split_terminator(',').collect();
-                        adr.address1 = vals[1].trim().to_string();
-                        adr.address2 = Some(format!("{} {}", vals[0].trim(), lnes[idx - 3]));
-                    } else {
-                        // Standard case.
-                        adr.address1.clone_from(&lnes[idx - 3]);
+                if idx_adr1 == usize::MAX {
+                    eprintln!("Unable to find address line 1 {}", adr);
+                    return None;
+                }
+                adr.address1.clone_from(&lnes[idx_adr1]);
+
+                // Address2, if any.
+                // If multiple lines, concatenate.
+                let mut idx_adr2 = idx_adr1 + 1;
+                if idx_adr2 != idx_city {
+                    let mut address2 = lnes[idx_adr2].clone();
+                    idx_adr2 += 1;
+                    while idx_adr2 != idx_city {
+                        address2.push(' ');
+                        address2.push_str(&lnes[idx_adr2]);
+                        idx_adr2 += 1;
                     }
+                    adr.address2 = Some(address2);
                 }
                 adrs.push(adr);
             }
+        }
+
+        // Must have one office in state and DC.
+        if adrs.len() < 2 {
+            return None;
         }
 
         // Deduplicate extracted addresses.
@@ -106,10 +155,6 @@ impl Prsr {
         // adrs[0].zip = "77535".into();
 
         eprintln!("{} addresses parsed.", adrs.len());
-
-        if adrs.is_empty() {
-            return None;
-        }
 
         Some(adrs)
     }
@@ -143,6 +188,21 @@ pub fn validate_addresses(per: &Person, adrs: &[Address]) -> Result<()> {
         }
         if adr.zip.is_empty() {
             return Err(anyhow!("address: zip empty {:?}", adr));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn filter_invalid_addresses(per: &Person, adrs: &mut Vec<Address>) -> Result<()> {
+    // Address { first_name: "Mark", last_name: "Amodei", address1: "89511", address2: Some("Elko Contact"), city: "Elko", state: "NV", zip: "89801" }
+    // 7676W COUNTY ROAD 442, SUITE B,,MANISTIQUE,MI,49854
+    for idx in (0..adrs.len()).rev() {
+        match adrs[idx].zip.as_str() {
+            "89801" | "49854" => {
+                adrs.remove(idx);
+            }
+            _ => {}
         }
     }
 
@@ -214,6 +274,13 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
     // Trim list prefix prior to "House Office Building"
     // Reverse indexes to allow for room line removal.
     for idx in (0..lnes.len()).rev() {
+        if !(lnes[idx].contains("CANNON")
+            || lnes[idx].contains("LONGWORTH")
+            || lnes[idx].contains("RAYBURN"))
+        {
+            continue;
+        }
+
         // "1107 LONGWORTH HOUSE", "OFFICE BUILDING"
         if idx + 1 != lnes.len()
             && lnes[idx].ends_with("HOUSE")
@@ -225,15 +292,23 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
 
         // "2312 RAYBURN HOUSE OFFICE BUILDING"
         // "2430 RAYBURN HOUSE OFFICE BLDG."
-        if let Some(hob_idx) = lnes[idx].find("HOUSE OFFICE") {
-            lnes[idx].truncate(hob_idx);
+        if let Some(idx_fnd) = lnes[idx].find("HOUSE OFFICE") {
+            lnes[idx].truncate(idx_fnd);
             lnes[idx].push_str("HOB");
             // No break. Can have duplicate addresses.
         }
+
+        // 2205 RAYBURN BUILDING
+        if let Some(idx_fnd) = lnes[idx].find("BUILDING") {
+            lnes[idx].truncate(idx_fnd);
+            lnes[idx].push_str("HOB");
+            // No break. Can have duplicate addresses.
+        }
+
         // "1119 LONGWORTH H.O.B."
         // "H.O.B." -> "HOB"
-        if let Some(hob_idx) = lnes[idx].find("H.O.B.") {
-            lnes[idx].truncate(hob_idx);
+        if let Some(idx_fnd) = lnes[idx].find("H.O.B.") {
+            lnes[idx].truncate(idx_fnd);
             lnes[idx].push_str("HOB");
             // No break. Can have duplicate addresses.
         }
@@ -258,6 +333,31 @@ pub fn edit_dot(lnes: &mut [String]) {
     for lne in lnes.iter_mut() {
         if lne.contains('.') {
             *lne = lne.replace('.', "");
+        }
+    }
+}
+
+pub fn edit_single_comma(lnes: &mut Vec<String>) {
+    // Remove single comma.
+    // "," -> DELETE
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx] == "," {
+            lnes.remove(idx);
+        }
+    }
+}
+
+pub fn edit_split_comma(lnes: &mut Vec<String>) {
+    // Remove dots.
+    // "U.S. FEDERAL BUILDING, 220 E ROSSER AVENUE" ->
+    // "U.S. FEDERAL BUILDING" "220 E ROSSER AVENUE"
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx].contains(',') {
+            let lne = lnes[idx].clone();
+            for s in lne.split(|c: char| c == ',').rev() {
+                lnes.insert(idx + 1, s.trim().to_string());
+            }
+            lnes.remove(idx);
         }
     }
 }
@@ -309,6 +409,135 @@ pub fn has_lne_zip(lnes: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_valid_regex_po_box_addresses() {
+        let prsr = Prsr::new();
+
+        let valid_addresses = vec![
+            "PO BOX 123",
+            "P.O. BOX 456",
+            // "POBOX789",
+            "P.O.BOX 1011",
+            // "PO BOX1234",
+            "PO BOX 5678",
+        ];
+
+        for address in valid_addresses {
+            assert!(prsr.re_po_box.is_match(address), "Failed to match: {}", address);
+        }
+    }
+
+    #[test]
+    fn test_regex_address1_valid_addresses() {
+        let prsr = Prsr::new();
+
+        let valid_addresses = vec![
+            "123 Main St",
+            "456 Elm St Apt 7",
+            "789Broadway",
+            "10 Downing Street",
+            "5th Avenue",
+            "1024 E 7th St",
+            "PO BOX 123",
+            "PO BOX 45678",
+            "POBOX789",
+            "PO BOX B",
+        ];
+
+        for address in valid_addresses {
+            assert!(
+                prsr.re_address1.is_match(address),
+                "Failed to match: {}",
+                address
+            );
+        }
+    }
+
+    #[test]
+    fn test_regex_address1_invalid_addresses() {
+        let prsr = Prsr::new();
+
+        let invalid_addresses = vec![
+            "Main St",
+            "Elm St Apt 7",
+            "Broadway",
+            "Downing Street",
+            "Avenue",
+            " E 7th St",
+        ];
+
+        for address in invalid_addresses {
+            assert!(
+                !prsr.re_address1.is_match(address),
+                "Incorrectly matched: {}",
+                address
+            );
+        }
+    }
+    #[test]
+    fn test_regex_phone_common_formats() {
+        let prsr = Prsr::new();
+
+        let common_cases = vec![
+            "202-225-4735",
+            "(202) 225-4735",
+            "202.225.4735",
+            "2022254735",
+            "+1-202-225-4735",
+            "123-456-7890",
+            "(123) 456-7890",
+            "123.456.7890",
+            "+1 123 456 7890",
+        ];
+
+        for case in common_cases {
+            assert!(prsr.re_phone.is_match(case), "Failed to match: {}", case);
+        }
+    }
+
+    #[test]
+    fn test_regex_phone_edge_cases() {
+        let prsr = Prsr::new();
+
+        let edge_cases = vec![
+            "1-202-225-4735",
+            "(123)-456-7890",
+            "123 456 7890",
+            "12345678901",
+            "000-000-0000",
+            "111.111.1111",
+            "2222222222",
+            "+1 (123) 456-7890",
+            "+11234567890",
+        ];
+
+        for case in edge_cases {
+            assert!(prsr.re_phone.is_match(case), "Failed to match: {}", case);
+        }
+    }
+
+    #[test]
+    fn test_regex_phone_invalid_formats() {
+        let prsr = Prsr::new();
+
+        let invalid_cases = vec![
+            "12345",
+            "phone number: 123-456-789",
+            "123-45-67890",
+            "abcd-efg-hijk",
+            // "123.4567.890",
+            // "+1-123-4567-890",
+        ];
+
+        for case in invalid_cases {
+            assert!(
+                !prsr.re_phone.is_match(case),
+                "Incorrectly matched: {}",
+                case
+            );
+        }
+    }
 
     #[test]
     fn test_remove_initials() {

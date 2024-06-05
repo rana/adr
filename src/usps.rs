@@ -4,66 +4,27 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-pub async fn standardize_addresses(adrs: &mut Vec<Address>, cli: &Client) -> Result<()> {
-    // Reverse indexes to allow for removal of invalid addresses.
-    for idx in (0..adrs.len()).rev() {
-        match standardize_address(&mut adrs[idx], cli).await {
-            Ok(_) => {
-                // The USPS prefers that secondary address designators such as "APT" (Apartment) or "STE" (Suite) appear on the same line as the street address when there is enough space. However, it is also acceptable for these designators to appear on a separate line if needed, typically as Address Line 2.
+pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result<()> {
+    // The USPS prefers that secondary address designators such as "APT" (Apartment) or "STE" (Suite) appear on the same line as the street address when there is enough space. However, it is also acceptable for these designators to appear on a separate line if needed, typically as Address Line 2.
 
-                // // Edit edge cases:
-                // // 2743 PERIMETR PKWY BLDG 200 STE 105,STE 105,AUGUSTA,GA
-                // if let Some(idx_fnd) = adrs[idx].address1.find(" BLDG ") {
-                //     let mut address2 = adrs[idx].address2.clone().unwrap_or_default();
-                //     address2.push_str(&adrs[idx].address1[idx_fnd..]);
-                //     adrs[idx].address2 = Some(address2.trim().into());
-                //     adrs[idx].address1.truncate(idx_fnd);
-                // }
-                // // 685 CARNEGIE DR STE 100,,SAN BERNARDINO,CA
-                // else if let Some(idx_fnd) = adrs[idx].address1.rfind(" STE ") {
-                //     let mut address2 = adrs[idx].address2.clone().unwrap_or_default();
-                //     address2.push_str(&adrs[idx].address1[idx_fnd..]);
-                //     adrs[idx].address2 = Some(address2.trim().into());
-                //     adrs[idx].address1.truncate(idx_fnd);
-                // }
-                // // 1070 MAIN ST UNIT 300,,PAWTUCKET,RI
-                // else if let Some(idx_fnd) = adrs[idx].address1.rfind(" UNIT ") {
-                //     let mut address2 = adrs[idx].address2.clone().unwrap_or_default();
-                //     address2.push_str(&adrs[idx].address1[idx_fnd..]);
-                //     adrs[idx].address2 = Some(address2.trim().into());
-                //     adrs[idx].address1.truncate(idx_fnd);
-                // }
-                // // 220 E ROSSER AVENUE RM 228,US FEDERAL BUILDING,BISMARCK,,ND,58501
-                // else if let Some(idx_fnd) = adrs[idx].address1.rfind(" RM ") {
-                //     let mut address2 = adrs[idx].address2.clone().unwrap_or_default();
-                //     address2.push_str(&adrs[idx].address1[idx_fnd..]);
-                //     adrs[idx].address2 = Some(address2.trim().into());
-                //     adrs[idx].address1.truncate(idx_fnd);
-                // }
-                // // 1 GOVERNMENT CTR OFC 237B,,FALL RIVER,MA,02722-7700
-                // else if let Some(idx_fnd) = adrs[idx].address1.rfind(" OFC ") {
-                //     let mut address2 = adrs[idx].address2.clone().unwrap_or_default();
-                //     address2.push_str(&adrs[idx].address1[idx_fnd..]);
-                //     adrs[idx].address2 = Some(address2.trim().into());
-                //     adrs[idx].address1.truncate(idx_fnd);
-                // }
-            }
+    for adr in adrs.iter_mut() {
+        match standardize_address(adr, true, cli).await {
+            Ok(_) => {}
             Err(err) => {
-                eprintln!("standardize_addresses: err: {}", err);
-                // Mitigate failed address standardization.
-                // Some non-addresses may be removed here.
-                // INVALID ADDRESSES
-                // https://amodei.house.gov/
-                // Address { first_name: "Mark", last_name: "Amodei", address1: "89511", address2: Some("Elko Contact"), city: "Elko", state: "NV", zip: "89801" }
-                if adrs[idx].zip == "89801" {
-                    eprintln!("removed invalid address: {:?}", adrs[idx]);
-                    adrs.remove(idx);
-                } else {
-                    eprintln!("Attempting to standardise address without zip.");
-                    adrs[idx].zip = "".into();
-                    eprintln!("  {}", adrs[idx]);
-                    standardize_address(&mut adrs[idx], cli).await?;
-                    // return Err(err);
+                eprintln!("standardize_addresses: err1: {}", err);
+
+                eprintln!("Attempting to standardize without combining address lines.");
+                match standardize_address(adr, false, cli).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        eprintln!("standardize_addresses: err2: {}", err);
+
+                        // Mitigate failed address standardization.
+                        eprintln!("Attempting to standardize address without zip.");
+                        adr.zip = "".into();
+                        eprintln!("  {}", adr);
+                        standardize_address(adr, true, cli).await?;
+                    }
                 }
             }
         }
@@ -72,17 +33,33 @@ pub async fn standardize_addresses(adrs: &mut Vec<Address>, cli: &Client) -> Res
     Ok(())
 }
 
-pub async fn standardize_address(adr: &mut Address, cli: &Client) -> Result<()> {
+pub async fn standardize_address(
+    adr: &mut Address,
+    combine_address2: bool,
+    cli: &Client,
+) -> Result<()> {
     let client = Client::new();
-
     let mut prms: Vec<(&str, String)> = Vec::with_capacity(5);
-    if !adr.address1.is_empty() {
-        prms.push(("address1", adr.address1.clone()));
+
+    if combine_address2 {
+        let mut address1 = adr.address1.clone();
+        if let Some(address2) = adr.address2.clone() {
+            if address2 != "SUPERSTITION PLAZA" {
+                address1.push(' ');
+                address1.push_str(&address2);
+            }
+        }
+        prms.push(("address1", address1));
+    } else {
+        if !adr.address1.is_empty() {
+            prms.push(("address1", adr.address1.clone()));
+        }
+        if adr.address2.is_some() {
+            let address2 = adr.address2.clone().unwrap();
+            prms.push(("address2", address2));
+        }
     }
-    if adr.address2.is_some() {
-        let address2 = adr.address2.clone().unwrap();
-        prms.push(("address2", address2));
-    }
+
     if !adr.city.is_empty() {
         prms.push(("city", adr.city.clone()));
     }
@@ -102,12 +79,12 @@ pub async fn standardize_address(adr: &mut Address, cli: &Client) -> Result<()> 
     eprintln!("{}", response_text);
     let response_json: USPSResponse = serde_json::from_str(&response_text)?;
 
-    if response_json.resultStatus == "SUCCESS" {
-        if !response_json.addressList.is_empty() {
+    if response_json.result_status == "SUCCESS" {
+        if !response_json.address_list.is_empty() {
             if let Some(new_adr) = response_json
-                .addressList
+                .address_list
                 .into_iter()
-                .find(|v| !v.addressLine1.contains("Range"))
+                .find(|v| !v.address_line1.contains("Range"))
             {
                 from(adr, new_adr);
                 Ok(())
@@ -125,16 +102,18 @@ pub async fn standardize_address(adr: &mut Address, cli: &Client) -> Result<()> 
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct USPSResponse {
-    resultStatus: String,
-    addressList: Vec<USPSAddress>,
+    result_status: String,
+    address_list: Vec<USPSAddress>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct USPSAddress {
-    companyName: Option<String>,
-    addressLine1: String,
-    addressLine2: Option<String>,
+    company_name: Option<String>,
+    address_line1: String,
+    address_line2: Option<String>,
     city: String,
     state: String,
     zip5: String,
@@ -142,8 +121,8 @@ pub struct USPSAddress {
 }
 
 fn from(adr: &mut Address, usps: USPSAddress) {
-    adr.address1 = usps.addressLine1;
-    adr.address2 = usps.addressLine2;
+    adr.address1 = usps.address_line1;
+    adr.address2 = usps.address_line2;
     adr.city = usps.city;
     adr.state = usps.state;
     adr.zip = format!("{}-{}", usps.zip5, usps.zip4);
