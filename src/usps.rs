@@ -81,17 +81,28 @@ pub async fn standardize_address(
 
     if response_json.result_status == "SUCCESS" {
         if !response_json.address_list.is_empty() {
-            if let Some(new_adr) = response_json
+            let usps_adrs: Vec<USPSAddress> = response_json
                 .address_list
                 .into_iter()
-                .find(|v| !v.address_line1.contains("Range"))
-            {
-                from(adr, new_adr);
-                Ok(())
-            } else {
-                Err(anyhow!(
+                .filter(|v| !v.address_line1.contains("Range"))
+                .collect();
+
+            match usps_adrs.len() {
+                1 => {
+                    from(adr, usps_adrs[0].clone());
+                    Ok(())
+                }
+                n if n > 1 => {
+                    if let Some(new_adr) = usps_adrs.iter().find(|v| v.address_line2.is_none()) {
+                        from(adr, new_adr.clone());
+                    } else {
+                        from(adr, usps_adrs[0].clone());
+                    }
+                    Ok(())
+                }
+                _ => Err(anyhow!(
                     "Over filtered response. No address found in the USPS response."
-                ))
+                )),
             }
         } else {
             Err(anyhow!("No address found in the USPS response."))

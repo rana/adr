@@ -108,6 +108,14 @@ impl House {
                             .to_string()
                     });
 
+                // Ensure url ends with ".house.gov".
+                // https://katherineclark.house.gov/index.cfm/home"
+                if !rep.url.ends_with(".gov") {
+                    if let Some(idx_fnd) = rep.url.find(".gov") {
+                        rep.url.truncate(idx_fnd + 4);
+                    }
+                }
+
                 self.persons.push(rep);
             }
         }
@@ -123,6 +131,13 @@ impl House {
             }
             if rep.url.is_empty() {
                 return Err(anyhow!("house: url empty (idx:{} {:?})", idx, rep));
+            }
+            if !rep.url.ends_with(".house.gov") {
+                return Err(anyhow!(
+                    "house: url doesn't end with '.house.gov' (idx:{} {:?})",
+                    idx,
+                    rep
+                ));
             }
         }
         Ok(())
@@ -147,12 +162,13 @@ impl House {
 
             // Fetch addresses into person.
             let mut has_adrs =
-                fetch_addresses(&mut self_clone, idx, per, "contact", cli, prsr).await?;
+                fetch_parse_adrs(&mut self_clone, idx, per, "contact", cli, prsr).await?;
             if !has_adrs {
-                has_adrs = fetch_addresses(&mut self_clone, idx, per, "contact/offices", cli, prsr)
-                    .await?;
+                has_adrs =
+                    fetch_parse_adrs(&mut self_clone, idx, per, "contact/offices", cli, prsr)
+                        .await?;
                 if !has_adrs {
-                    has_adrs = fetch_addresses(
+                    has_adrs = fetch_parse_adrs(
                         &mut self_clone,
                         idx,
                         per,
@@ -162,7 +178,25 @@ impl House {
                     )
                     .await?;
                     if !has_adrs {
-                        fetch_addresses(&mut self_clone, idx, per, "offices", cli, prsr).await?;
+                        has_adrs =
+                            fetch_parse_adrs(&mut self_clone, idx, per, "offices", cli, prsr)
+                                .await?;
+                        if !has_adrs {
+                            has_adrs = fetch_parse_adrs(
+                                &mut self_clone,
+                                idx,
+                                per,
+                                "office-locations",
+                                cli,
+                                prsr,
+                            )
+                            .await?;
+                            if !has_adrs {
+                                has_adrs =
+                                    fetch_parse_adrs(&mut self_clone, idx, per, "", cli, prsr)
+                                        .await?;
+                            }
+                        }
                     }
                 }
             }
@@ -172,7 +206,7 @@ impl House {
     }
 }
 
-pub async fn fetch_addresses(
+pub async fn fetch_parse_adrs(
     self_clone: &mut House,
     idx: usize,
     per: &mut Person,
@@ -180,7 +214,7 @@ pub async fn fetch_addresses(
     cli: &Client,
     prsr: &Prsr,
 ) -> Result<bool> {
-    let mut adr_lnes_o = fetch_address_lnes(per, url_path, cli, prsr).await?;
+    let mut adr_lnes_o = fetch_adr_lnes(per, url_path, cli, prsr).await?;
 
     // Parse lines to Addresses.
     match adr_lnes_o {
@@ -214,7 +248,7 @@ pub async fn fetch_addresses(
     Ok(true)
 }
 
-pub async fn fetch_address_lnes(
+pub async fn fetch_adr_lnes(
     per: &mut Person,
     url_path: &str,
     cli: &Client,
@@ -223,7 +257,11 @@ pub async fn fetch_address_lnes(
     // Some representative addresses are in a contact webpage.
 
     // Fetch a URL.
-    let url = format!("{}/{}", per.url, url_path);
+    let mut url = per.url.clone();
+    if !url_path.is_empty() {
+        url.push('/');
+        url.push_str(url_path);
+    }
     let html = fetch_html(url.as_str(), cli).await?;
 
     // Parse HTML.
@@ -235,14 +273,21 @@ pub async fn fetch_address_lnes(
         "address",
         ".internal__offices--address",
         ".office-locations",
+        "article",
         "body",
     ] {
         let selector = Selector::parse(txt).unwrap();
         for elm in document.select(&selector) {
-            // Get lines and filter.
-            let cur_lnes = elm
+            // Extract lines from html.
+            let mut cur_lnes = elm
                 .text()
                 .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
+                .collect::<Vec<String>>();
+
+            // Filter lines.
+            // Filter separately to allow debugging.
+            cur_lnes = cur_lnes
+                .into_iter()
                 .filter(|s| prsr.filter(s))
                 .collect::<Vec<String>>();
 
@@ -256,15 +301,18 @@ pub async fn fetch_address_lnes(
         }
     }
 
-    // eprintln!("{lnes:?}");
+    // eprintln!("--- pre: {lnes:?}");
 
     // Edit lines to make it easier to parse.
     prsr.edit_lnes(&mut lnes);
+    edit_newline(&mut lnes);
     edit_hob(&mut lnes);
+    edit_split_comma(&mut lnes);
+    edit_by_appt(&mut lnes);
 
-    // eprintln!("--- {lnes:?}");
+    // eprintln!("--- post: {lnes:?}");
 
-    if has_lne_zip(&lnes) {
+    if prsr.lnes_have_zip(&lnes) {
         return Ok(Some(lnes));
     }
 

@@ -155,3 +155,19 @@ impl Military {
         Ok(())
     }
 }
+
+pub fn edit_title_military(lnes: &mut [String]) {
+    // Remove dots.
+    // "DR. WILLIAM" -> "WILLIAM"
+    // "GENERAL CHARLES" -> "CHARLES"
+    // "ADMIRAL CHRISTOPHER" -> "CHRISTOPHER"
+    for lne in lnes.iter_mut() {
+        if lne.starts_with("DR. ") {
+            *lne = lne.replace("DR. ", "");
+        } else if lne.starts_with("GENERAL ") {
+            *lne = lne.replace("GENERAL ", "");
+        } else if lne.starts_with("ADMIRAL ") {
+            *lne = lne.replace("ADMIRAL ", "");
+        }
+    }
+}
