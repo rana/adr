@@ -136,5 +136,9 @@ fn from(adr: &mut Address, usps: USPSAddress) {
     adr.address2 = usps.address_line2;
     adr.city = usps.city;
     adr.state = usps.state;
-    adr.zip = format!("{}-{}", usps.zip5, usps.zip4);
+    if usps.zip4.is_empty() {
+        adr.zip = usps.zip5;
+    } else {
+        adr.zip = format!("{}-{}", usps.zip5, usps.zip4);
+    }
 }

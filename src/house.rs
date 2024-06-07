@@ -150,7 +150,7 @@ impl House {
         // Clone self before iterating over self.persons to avoid borrowing conflicts.
         // For checkpoint saving.
         let mut self_clone = self.clone();
-
+        let per_len = self.persons.len() as f64;
         for (idx, per) in self
             .persons
             .iter_mut()
@@ -158,25 +158,28 @@ impl House {
             .filter(|(_, per)| per.adrs.is_none())
             .take(1)
         {
-            eprintln!("  {} {} {} {}", idx, per.name_fst, per.name_lst, per.url);
+            let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
+            eprintln!(
+                "  {}% {} {} {} {}",
+                pct, idx, per.name_fst, per.name_lst, per.url
+            );
 
             // Fetch addresses into person.
             let mut has_adrs =
-                fetch_parse_adrs(&mut self_clone, idx, per, "contact", cli, prsr).await?;
+                fetch_parse_adrs(&mut self_clone, idx, per, "contact/offices", cli, prsr).await?;
             if !has_adrs {
-                has_adrs =
-                    fetch_parse_adrs(&mut self_clone, idx, per, "contact/offices", cli, prsr)
-                        .await?;
+                has_adrs = fetch_parse_adrs(
+                    &mut self_clone,
+                    idx,
+                    per,
+                    "contact/office-locations",
+                    cli,
+                    prsr,
+                )
+                .await?;
                 if !has_adrs {
-                    has_adrs = fetch_parse_adrs(
-                        &mut self_clone,
-                        idx,
-                        per,
-                        "contact/office-locations",
-                        cli,
-                        prsr,
-                    )
-                    .await?;
+                    has_adrs =
+                        fetch_parse_adrs(&mut self_clone, idx, per, "contact", cli, prsr).await?;
                     if !has_adrs {
                         has_adrs =
                             fetch_parse_adrs(&mut self_clone, idx, per, "offices", cli, prsr)
@@ -274,6 +277,7 @@ pub async fn fetch_adr_lnes(
         ".internal__offices--address",
         ".office-locations",
         "article",
+        "div.office-address",
         "body",
     ] {
         let selector = Selector::parse(txt).unwrap();
@@ -309,8 +313,14 @@ pub async fn fetch_adr_lnes(
     edit_hob(&mut lnes);
     edit_split_comma(&mut lnes);
     edit_by_appt(&mut lnes);
+    edit_mailing(&mut lnes);
+    edit_pearl_river(&mut lnes);
+    edit_office_suite(&mut lnes);
+    edit_starting_hash(&mut lnes);
+    edit_char_half(&mut lnes);
+    edit_empty(&mut lnes);
 
-    // eprintln!("--- post: {lnes:?}");
+    eprintln!("--- post: {lnes:?}");
 
     if prsr.lnes_have_zip(&lnes) {
         return Ok(Some(lnes));

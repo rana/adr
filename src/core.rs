@@ -57,13 +57,6 @@ pub async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
     Ok(bdy)
 }
 
-// /// Fetches HTML from a URL.
-// pub async fn fetch_html_prv(url: &str, cli: &Client) -> Result<String> {
-//     eprintln!("Fetching {url:?}...");
-//     let res = cli.get(url).send().await?;
-//     let bdy = res.text().await?;
-//     Ok(bdy)
-// }
 
 /// Converts a URL to a safe filename by replacing non-alphanumeric characters.
 fn url_to_filename(url: &str) -> String {
@@ -74,22 +67,22 @@ fn url_to_filename(url: &str) -> String {
         .collect()
 }
 
-// Function to safely get a substring from the end of a string.
-pub fn safe_slice_from_end(s: &str, len: usize) -> &str {
-    if len > s.len() {
-        return s; // If the requested length is greater than the string length, return the entire string
-    }
-    let mut char_indices = s.char_indices().rev();
-    let mut byte_index = s.len();
-    for _ in 0..len {
-        if let Some((idx, _)) = char_indices.next() {
-            byte_index = idx;
-        } else {
-            break;
-        }
-    }
-    &s[byte_index..]
-}
+// // Safely get a substring from the end of a string.
+// pub fn safe_slice_from_end(s: &str, len: usize) -> &str {
+//     if len > s.len() {
+//         return s; // If the requested length is greater than the string length, return the entire string
+//     }
+//     let mut char_indices = s.char_indices().rev();
+//     let mut byte_index = s.len();
+//     for _ in 0..len {
+//         if let Some((idx, _)) = char_indices.next() {
+//             byte_index = idx;
+//         } else {
+//             break;
+//         }
+//     }
+//     &s[byte_index..]
+// }
 
 #[cfg(test)]
 mod tests {
@@ -97,30 +90,6 @@ mod tests {
     use reqwest::Client;
     use std::fs;
     use tokio::runtime::Runtime;
-
-    #[test]
-    fn test_safe_slice_from_end() {
-        let cases = vec![
-            ("Hello, world!", 5, "orld!"),          // Normal case
-            ("Hello, world!", 13, "Hello, world!"), // Exact length
-            ("Hello, world!", 20, "Hello, world!"), // Length longer than string
-            ("12345", 5, "12345"),                  // String with digits
-            ("", 5, ""),                            // Empty string
-            ("a", 1, "a"),                          // Single character string
-            ("日本語のテキスト", 3, "キスト"),      // String with multi-byte characters
-            ("abc😃def", 3, "def"),                 // String with emoji (multi-byte)
-            ("abc😃def", 4, "😃def"),               // Slicing including emoji
-        ];
-
-        for (input, len, expected) in cases {
-            assert_eq!(
-                safe_slice_from_end(input, len),
-                expected,
-                "Failed for input: {}",
-                input
-            );
-        }
-    }
 
     #[test]
     fn test_fetch_html_with_caching() {
