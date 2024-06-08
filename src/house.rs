@@ -165,44 +165,90 @@ impl House {
             );
 
             // Fetch addresses into person.
-            let mut has_adrs =
-                fetch_parse_adrs(&mut self_clone, idx, per, "contact/offices", cli, prsr).await?;
-            if !has_adrs {
-                has_adrs = fetch_parse_adrs(
-                    &mut self_clone,
-                    idx,
-                    per,
-                    "contact/office-locations",
-                    cli,
-                    prsr,
-                )
-                .await?;
-                if !has_adrs {
-                    has_adrs =
-                        fetch_parse_adrs(&mut self_clone, idx, per, "contact", cli, prsr).await?;
-                    if !has_adrs {
-                        has_adrs =
-                            fetch_parse_adrs(&mut self_clone, idx, per, "offices", cli, prsr)
-                                .await?;
-                        if !has_adrs {
-                            has_adrs = fetch_parse_adrs(
-                                &mut self_clone,
-                                idx,
-                                per,
-                                "office-locations",
-                                cli,
-                                prsr,
-                            )
-                            .await?;
-                            if !has_adrs {
-                                has_adrs =
-                                    fetch_parse_adrs(&mut self_clone, idx, per, "", cli, prsr)
-                                        .await?;
-                            }
-                        }
-                    }
+            let url_pathss = [
+                vec!["contact/offices"],
+                vec!["contact/office-locations"],
+                vec!["district"],
+                vec!["contact"],
+                vec!["offices"],
+                vec!["office-locations"],
+                vec!["office-information"],
+                vec![""],
+                vec!["washington-d-c-office", "district-office"],
+            ];
+            for url_paths in url_pathss {
+                if fetch_parse_adrs(&mut self_clone, idx, per, &url_paths, cli, prsr).await? {
+                    break;
                 }
             }
+
+            // let mut has_adrs =
+            //     fetch_parse_adrs(&mut self_clone, idx, per, &["contact/offices"], cli, prsr)
+            //         .await?;
+            // if !has_adrs {
+            //     has_adrs = fetch_parse_adrs(
+            //         &mut self_clone,
+            //         idx,
+            //         per,
+            //         &["contact/office-locations"],
+            //         cli,
+            //         prsr,
+            //     )
+            //     .await?;
+            //     if !has_adrs {
+            //         has_adrs = fetch_parse_adrs(&mut self_clone, idx, per, &["contact"], cli, prsr)
+            //             .await?;
+            //         if !has_adrs {
+            //             has_adrs =
+            //                 fetch_parse_adrs(&mut self_clone, idx, per, &["offices"], cli, prsr)
+            //                     .await?;
+            //             if !has_adrs {
+            //                 has_adrs = fetch_parse_adrs(
+            //                     &mut self_clone,
+            //                     idx,
+            //                     per,
+            //                     &["office-locations"],
+            //                     cli,
+            //                     prsr,
+            //                 )
+            //                 .await?;
+            //                 if !has_adrs {
+            //                     has_adrs = fetch_parse_adrs(
+            //                         &mut self_clone,
+            //                         idx,
+            //                         per,
+            //                         &["office-information"],
+            //                         cli,
+            //                         prsr,
+            //                     )
+            //                     .await?;
+            //                     if !has_adrs {
+            //                         has_adrs = fetch_parse_adrs(
+            //                             &mut self_clone,
+            //                             idx,
+            //                             per,
+            //                             &[""],
+            //                             cli,
+            //                             prsr,
+            //                         )
+            //                         .await?;
+            //                         if !has_adrs {
+            //                             fetch_parse_adrs(
+            //                                 &mut self_clone,
+            //                                 idx,
+            //                                 per,
+            //                                 &["washington-d-c-office", "district-office"],
+            //                                 cli,
+            //                                 prsr,
+            //                             )
+            //                             .await?;
+            //                         }
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
         }
 
         Ok(())
@@ -213,16 +259,31 @@ pub async fn fetch_parse_adrs(
     self_clone: &mut House,
     idx: usize,
     per: &mut Person,
-    url_path: &str,
+    url_paths: &[&str],
     cli: &Client,
     prsr: &Prsr,
 ) -> Result<bool> {
-    let mut adr_lnes_o = fetch_adr_lnes(per, url_path, cli, prsr).await?;
+    // Fetch one or more pages of adress lines.
+    let mut adr_lnes_o: Option<Vec<String>> = None;
+    for url_path in url_paths {
+        match fetch_adr_lnes(per, url_path, cli, prsr).await? {
+            None => {}
+            Some(new_lnes) => {
+                if adr_lnes_o.is_none() {
+                    adr_lnes_o = Some(new_lnes);
+                } else {
+                    let mut adr_lnes = adr_lnes_o.unwrap();
+                    adr_lnes.extend(new_lnes);
+                    adr_lnes_o = Some(adr_lnes);
+                }
+            }
+        }
+    }
 
     // Parse lines to Addresses.
     match adr_lnes_o {
         None => return Ok(false),
-        Some(adr_lnes) => {
+        Some(mut adr_lnes) => {
             match prsr.parse_addresses(per, &adr_lnes) {
                 None => return Ok(false),
                 Some(mut adrs) => {
@@ -274,6 +335,8 @@ pub async fn fetch_adr_lnes(
     let mut lnes: Vec<String> = Vec::new();
     for txt in [
         "address",
+        "div.address-footer",
+        "div.item",
         ".internal__offices--address",
         ".office-locations",
         "article",
@@ -308,14 +371,14 @@ pub async fn fetch_adr_lnes(
     // eprintln!("--- pre: {lnes:?}");
 
     // Edit lines to make it easier to parse.
+    edit_dot(&mut lnes);
+    edit_person_lnes(per, &mut lnes);
     prsr.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
     edit_hob(&mut lnes);
     edit_split_comma(&mut lnes);
-    edit_by_appt(&mut lnes);
     edit_mailing(&mut lnes);
-    edit_pearl_river(&mut lnes);
-    edit_office_suite(&mut lnes);
+    // edit_office_suite(&mut lnes);
     edit_starting_hash(&mut lnes);
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);

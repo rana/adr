@@ -3,27 +3,37 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use StdAdr::*;
 
 pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result<()> {
     // The USPS prefers that secondary address designators such as "APT" (Apartment) or "STE" (Suite) appear on the same line as the street address when there is enough space. However, it is also acceptable for these designators to appear on a separate line if needed, typically as Address Line 2.
 
     for adr in adrs.iter_mut() {
-        match standardize_address(adr, true, cli).await {
+        eprintln!("Attempting to standardize by combining address lines.");
+        match standardize_address(adr, AsIs, false, cli).await {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("standardize_addresses: err1: {}", err);
 
                 eprintln!("Attempting to standardize without combining address lines.");
-                match standardize_address(adr, false, cli).await {
+                match standardize_address(adr, CombineAdr1Adr2, false, cli).await {
                     Ok(_) => {}
                     Err(err) => {
                         eprintln!("standardize_addresses: err2: {}", err);
 
-                        // Mitigate failed address standardization.
-                        eprintln!("Attempting to standardize address without zip.");
-                        adr.zip = "".into();
-                        eprintln!("  {}", adr);
-                        standardize_address(adr, true, cli).await?;
+                        eprintln!("Attempting to standardize by swapping address lines.");
+                        match standardize_address(adr, SwapAdr1Adr2, false, cli).await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                eprintln!("standardize_addresses: err3: {}", err);
+
+                                // Mitigate failed address standardization.
+                                eprintln!("Attempting to standardize address without zip.");
+                                adr.zip = "".into();
+                                eprintln!("  {}", adr);
+                                standardize_address(adr, AsIs, true, cli).await?;
+                            }
+                        }
                     }
                 }
             }
@@ -33,30 +43,45 @@ pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result
     Ok(())
 }
 
+#[derive(PartialEq)]
+pub enum StdAdr {
+    AsIs,
+    CombineAdr1Adr2,
+    SwapAdr1Adr2,
+}
 pub async fn standardize_address(
     adr: &mut Address,
-    combine_address2: bool,
+    approach: StdAdr,
+    drop_zip: bool,
     cli: &Client,
 ) -> Result<()> {
     let client = Client::new();
     let mut prms: Vec<(&str, String)> = Vec::with_capacity(5);
-
-    if combine_address2 {
-        let mut address1 = adr.address1.clone();
-        if let Some(address2) = adr.address2.clone() {
-            if address2 != "SUPERSTITION PLAZA" {
+    match approach {
+        AsIs => {
+            if !adr.address1.is_empty() {
+                prms.push(("address1", adr.address1.clone()));
+            }
+            if adr.address2.is_some() {
+                let address2 = adr.address2.clone().unwrap();
+                prms.push(("address2", address2));
+            }
+        }
+        CombineAdr1Adr2 => {
+            let mut address1 = adr.address1.clone();
+            if let Some(address2) = adr.address2.clone() {
                 address1.push(' ');
                 address1.push_str(&address2);
             }
+            prms.push(("address1", address1));
         }
-        prms.push(("address1", address1));
-    } else {
-        if !adr.address1.is_empty() {
-            prms.push(("address1", adr.address1.clone()));
-        }
-        if adr.address2.is_some() {
-            let address2 = adr.address2.clone().unwrap();
-            prms.push(("address2", address2));
+        SwapAdr1Adr2 => {
+            if adr.address2.is_some() {
+                let address2 = adr.address2.clone().unwrap();
+                prms.push(("address1", address2));
+            } else {
+                return Err(anyhow!("No address2 to swap to address1."));
+            }
         }
     }
 
@@ -66,7 +91,7 @@ pub async fn standardize_address(
     if !adr.state.is_empty() {
         prms.push(("state", adr.state.clone()));
     }
-    if !adr.zip.is_empty() {
+    if !drop_zip && !adr.zip.is_empty() {
         prms.push(("zip", adr.zip.clone()));
     }
 
