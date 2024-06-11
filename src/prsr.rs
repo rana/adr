@@ -633,6 +633,13 @@ pub fn edit_person_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
+        ("Stacey", "Plaskett") => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "FREDERIKSTED, VI 00840" {
+                    lnes[idx] = "ST CROIX, VI 00840".into();
+                }
+            }
+        }
         ("", "") => {}
         _ => {}
     }
@@ -735,7 +742,6 @@ pub fn is_invalid_zip(zip: &str) -> bool {
             | "12451"
             | "28562"
             | "00802"
-            | "00840"
             | "96952"
     )
 }
