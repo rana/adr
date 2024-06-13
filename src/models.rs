@@ -29,6 +29,15 @@ pub struct Person {
     pub url: String,
     pub adrs: Option<Vec<Address>>,
 }
+impl fmt::Display for Person {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{},{},{},{},{}",
+            self.name_fst, self.name_lst, self.title1, self.title2, self.url
+        )
+    }
+}
 
 /// A mailing address.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,4 +84,3 @@ impl fmt::Display for AddressList {
         Ok(())
     }
 }
-

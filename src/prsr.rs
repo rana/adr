@@ -1,4 +1,5 @@
 use std::char;
+use std::clone;
 
 use crate::models::*;
 use crate::usps::*;
@@ -95,13 +96,17 @@ impl Prsr {
             && !s.contains("<DIV")
             && !s.contains("<SPAN")
             && !s.contains("HTTPS")
+            && !s.contains("ELEMENTOR")
+            && !s.contains("DIRECTIONS")
+            && !s.contains("ENTRANCE")
             && !self.re_phone.is_match(s)
             && !self.re_flt.is_match(s)
-            && !s.contains("PHONE:")
-            && !s.contains("FAX:")
+            && !s.contains("PHONE")
+            && !s.contains("FAX")
             && !s.contains("OFFICE OF")
             && !s.starts_with("P: ")
             && !s.starts_with("F: ")
+            && !s.starts_with("MAIN:")
             && !contains_time(s)
     }
 
@@ -218,13 +223,8 @@ impl Prsr {
         }
     }
 
-    pub fn lnes_have_zip(&self, lnes: &[String]) -> bool {
-        for lne in lnes {
-            if is_zip(lne) {
-                return true;
-            }
-        }
-        false
+    pub fn two_zip_or_more(&self, lnes: &[String]) -> bool {
+        lnes.iter().filter(|lne| is_zip(lne)).count() >= 2
     }
 
     pub fn edit_split_city_state_zip(&self, lnes: &mut Vec<String>) {
@@ -261,34 +261,6 @@ impl Prsr {
                     for mut prt in lne.split_terminator(',').rev() {
                         lnes.insert(idx, prt.trim().into());
                     }
-
-                    // let mut saw_state = false;
-                    // for mut prt in lne.split_terminator(',').rev() {
-                    //     prt = prt.trim();
-                    //     if saw_state {
-                    //         // Check if street and city not delimited.
-                    //         // 615 E WORTHY STREET GONZALES
-                    //         // 430 NORTH FRANKLIN ST FORT BRAGG, CA 95437
-                    //         if let Some(mat) = self.re_address1_suffix.find(prt) {
-                    //             if mat.end() != prt.len() {
-                    //                 // Split street from city.
-                    //                 let (adr1, city) = prt.split_at(mat.end());
-                    //                 lnes.insert(idx, city.trim().into());
-                    //                 lnes.insert(idx, adr1.trim().into());
-                    //             } else {
-                    //                 // Regular address line.
-                    //                 lnes.insert(idx, prt.into());
-                    //             }
-                    //         } else {
-                    //             // Regular address part.
-                    //             lnes.insert(idx, prt.into());
-                    //         }
-                    //     } else if self.re_state.is_match(prt) {
-                    //         // Insert state.
-                    //         lnes.insert(idx, prt.into());
-                    //         saw_state = true;
-                    //     }
-                    // }
                 } else {
                     // Check if street and city not delimited.
                     // 615 E WORTHY STREET GONZALES
@@ -296,30 +268,6 @@ impl Prsr {
                     // "GLEN ALLEN, VA 23060"
                     // "SAN LUIS OBISPO, CA 93401"
                     lnes.insert(idx, lne);
-
-                    //--
-                    // let spc_cnt = lne.chars().filter(|c| c.is_whitespace()).count();
-                    // if spc_cnt < 2 || lne == "SAN LUIS OBISPO" {
-                    //     lnes.insert(idx, lne);
-                    // } else {
-                    //     for mut prt in lne.split_whitespace().rev() {
-                    //         lnes.insert(idx, prt.into());
-                    //     }
-                    // }
-
-                    //--
-                    // match lne.as_str() {
-                    //     "ST THOMAS" | "LAS VEGAS" | "SARATOGA SPRINGS" | "LAKE JACKSON"
-                    //     | "LEAGUE CITY" => {
-                    //         lnes.insert(idx, lne);
-                    //     }
-                    //     _ => {
-                    //         // "SOMERTON AZ 85350"
-                    //         for mut prt in lne.split_whitespace().rev() {
-                    //             lnes.insert(idx, prt.into());
-                    //         }
-                    //     }
-                    // }
                 }
             }
         }
@@ -330,13 +278,6 @@ pub fn filter_invalid_addresses(per: &Person, adrs: &mut Vec<Address>) -> Result
     for idx in (0..adrs.len()).rev() {
         if adrs[idx].address1 == "146 N STATE AVENUE" && adrs[idx].city == "SOMERTON" {
             adrs.remove(idx);
-        } else if adrs[idx].address1 == "27 INDEPENDENCE AVE SE" && adrs[idx].zip == "20003" {
-            // TODO: FIX? OR REMOVE "27 INDEPENDENCE AVE SE"?
-            // ADDRESS CAN APPLY TO MANY
-            adrs[idx].address1 = "143 CANNON HOB".into();
-            adrs[idx].city = "WASHINGTON".into();
-            adrs[idx].state = "DC".into();
-            adrs[idx].zip = "20515".into();
         }
     }
 
@@ -385,6 +326,96 @@ pub fn edit_drain_after_last_zip(lnes: &mut Vec<String>) {
         if is_zip(&lnes[idx]) {
             lnes.drain(idx + 1..);
             break;
+        }
+    }
+}
+
+pub fn edit_sob(lnes: &mut Vec<String>) {
+    // Trim list prefix prior to "Senate Office Building"
+    // Reverse indexes to allow for room line removal.
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx].starts_with("2 CONSTITUTION AVE")
+            || lnes[idx].starts_with("50 CONSTITUTION AVE")
+            || lnes[idx].starts_with("120 CONSTITUTION AVE")
+        {
+            lnes.remove(idx);
+        }
+
+        if !(lnes[idx].contains("HART")
+            || lnes[idx].contains("DIRKSEN")
+            || lnes[idx].contains("RUSSELL"))
+        {
+            continue;
+        }
+
+        // "509 HART", "SENATE OFFICE BLDG"
+        if idx + 1 != lnes.len()
+            && (lnes[idx].ends_with("HART")
+                || lnes[idx].ends_with("DIRKSEN")
+                || lnes[idx].ends_with("RUSSELL"))
+            && lnes[idx + 1].starts_with("SENATE OFFICE")
+        {
+            lnes[idx].push_str(" SOB");
+            lnes.remove(idx + 1);
+        }
+
+        // "110 HART SENATE OFFICE", "BUILDING"
+        if idx + 1 != lnes.len()
+            && lnes[idx].ends_with("SENATE OFFICE")
+            && lnes[idx + 1] == "BUILDING"
+        {
+            lnes[idx] = lnes[idx].replace("SENATE OFFICE", "SOB");
+            lnes.remove(idx + 1);
+        }
+
+        // "502 HART SENATE OFFICE BUILDING"
+        if let Some(idx_fnd) = lnes[idx].find("SENATE OFFICE") {
+            lnes[idx].truncate(idx_fnd);
+            lnes[idx].push_str("SOB");
+        }
+
+        // "313 HART OFFICE BUILDING"
+        if let Some(idx_fnd) = lnes[idx].find("OFFICE BUILDING") {
+            lnes[idx].truncate(idx_fnd);
+            lnes[idx].push_str("SOB");
+        }
+
+        // "331 HART SENATE", "OFFICE BUILDING"
+        // "503 HART SENATE", "OFFICE BLDG."
+        if lnes[idx].ends_with("SENATE") && lnes[idx + 1].starts_with("OFFICE") {
+            lnes[idx] = lnes[idx].replace("SENATE", "SOB");
+            lnes.remove(idx + 1);
+        }
+
+        // 261 RUSSELL SENATE BUILDING
+        if let Some(idx_fnd) = lnes[idx].find("SENATE BUILDING") {
+            lnes[idx].truncate(idx_fnd);
+            lnes[idx].push_str("SOB");
+        }
+
+        // 133 HART BUILDING
+        if let Some(idx_fnd) = lnes[idx].find("BUILDING") {
+            lnes[idx].truncate(idx_fnd);
+            lnes[idx].push_str("SOB");
+        }
+
+        // "ROOM 521"
+        // "SUITE 455"
+        // "SUITE SR-374"
+        // "SUITE 479A"
+        if idx + 1 != lnes.len()
+            && (lnes[idx + 1].contains("ROOM") || lnes[idx + 1].contains("SUITE"))
+            && lnes[idx].trim().ends_with("SOB")
+        {
+            // Filter digits.
+            let mut adr1: String = lnes[idx + 1]
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect();
+            adr1.push(' ');
+            adr1.push_str(&lnes[idx]);
+            lnes[idx] = adr1;
+            lnes.remove(idx + 1);
         }
     }
 }
@@ -446,16 +477,6 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
             // No break. Can have duplicate addresses.
         }
 
-        // // TODO: DELETE AND CHECK
-        // // "1119 LONGWORTH H.O.B."
-        // // "H.O.B." -> "HOB"
-        // if let Some(idx_fnd) = lnes[idx].find("H.O.B.") {
-        //     lnes[idx].truncate(idx_fnd);
-        //     lnes[idx].push_str("HOB");
-        //     // No break. Can have duplicate addresses.
-        // }
-
-        // Insert Room number to HOB if necessary.
         // "LONGWORTH HOB", "ROOM 1027"
         // Still check for ends with HOB as some addresses may originally have it.
         if idx + 1 != lnes.len()
@@ -505,146 +526,6 @@ pub fn edit_split_comma(lnes: &mut Vec<String>) {
     }
 }
 
-pub fn edit_person_lnes(per: &Person, lnes: &mut Vec<String>) {
-    match (per.name_fst.as_str(), per.name_lst.as_str()) {
-        ("Matthew", "Rosendale") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "3300 2ND AVENUE N SUITES 7-8" {
-                    lnes[idx] = "3300 2ND AVENUE N SUITE 7".into();
-                }
-            }
-        }
-        ("Terri", "Sewell") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "101 SOUTH LAWRENCE ST COURTHOUSE ANNEX 3" {
-                    lnes[idx] = "101 SOUTH LAWRENCE ST".into();
-                }
-            }
-        }
-        ("Joe", "Wilson") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "1700 SUNSET BLVD (US 378), SUITE 1" {
-                    lnes[idx] = "1700 SUNSET BLVD STE 1".into();
-                }
-            }
-        }
-        ("Robert", "Wittman") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "508 CHURCH LANE" || lnes[idx] == "307 MAIN STREET" {
-                    lnes.remove(idx);
-                }
-            }
-        }
-        ("Andy", "Biggs") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "SUPERSTITION PLAZA" {
-                    lnes.remove(idx);
-                }
-            }
-        }
-        ("John", "Carter") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "SUITE # I-10" {
-                    lnes.remove(idx);
-                }
-            }
-        }
-        ("Michael", "Cloud") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "TOWER II" {
-                    lnes.remove(idx);
-                }
-            }
-        }
-        ("Tony", "Gonzales") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx].contains("(BY APPT ONLY)") {
-                    lnes[idx] = lnes[idx].replace(" (BY APPT ONLY)", "");
-                }
-            }
-        }
-        ("Garret", "Graves") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx].contains("615 E WORTHY STREET GONZALES") {
-                    lnes[idx] = "GONZALES".into();
-                    lnes.insert(idx, "615 E WORTHY ST".into());
-                }
-            }
-        }
-        ("Jared", "Huffman") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "430 NORTH FRANKLIN ST FORT BRAGG, CA 95437" {
-                    lnes[idx] = "FORT BRAGG, CA 95437".into();
-                    lnes.insert(idx, "430 NORTH FRANKLIN ST".into());
-                } else if lnes[idx].contains("FORT BRAGG 95437") {
-                    lnes[idx] = "FORT BRAGG, CA 95437".into();
-                }
-            }
-        }
-        ("Bill", "Huizenga") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx].contains("108 PORTAGE, MI 49002") {
-                    lnes[idx] = lnes[idx].replace("108 PORTAGE, MI 49002", "108\nPORTAGE, MI 49002")
-                }
-            }
-        }
-        ("Mike", "Johnson") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "444 CASPARI DRIVE" || lnes[idx] == "SOUTH HALL ROOM 224" {
-                    lnes.remove(idx);
-                } else if lnes[idx] == "PO BOX 4989 (MAILING)" {
-                    lnes[idx] = "PO BOX 4989".into();
-                }
-            }
-        }
-        ("Michael", "Lawler") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "PO BOX 1645" {
-                    lnes.remove(idx);
-                }
-            }
-        }
-        ("Anna Paulina", "Luna") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx].contains("OFFICE SUITE:") {
-                    lnes[idx] = lnes[idx].replace("OFFICE SUITE:", "STE")
-                }
-            }
-        }
-        ("Daniel", "Meuser") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "SUITE 110, LOSCH PLAZA" {
-                    lnes[idx] = "SUITE 110".into();
-                }
-            }
-        }
-        ("Max", "Miller") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "WASHINGTON" && idx != 0 {
-                    lnes.insert(idx - 1, "143 CANNON HOB".into());
-                    break;
-                }
-            }
-        }
-        ("Frank", "Pallone") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "67/69 CHURCH ST" {
-                    lnes[idx] = "67 CHURCH ST".into();
-                }
-            }
-        }
-        ("Stacey", "Plaskett") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "FREDERIKSTED, VI 00840" {
-                    lnes[idx] = "ST CROIX, VI 00840".into();
-                }
-            }
-        }
-        ("", "") => {}
-        _ => {}
-    }
-}
-
 // TODO: MOVE TO edit_person_lnes.
 //  FIND PERSON
 pub fn edit_zip_disjoint(lnes: &mut Vec<String>) {
@@ -670,24 +551,13 @@ pub fn edit_mailing(lnes: &mut [String]) {
     }
 }
 
-pub fn edit_office_suite(lnes: &mut [String]) {
-    // Replace "OFFICE SUITE:".
-    // "9200 113TH ST. N. OFFICE SUITE: 305" ->
-    // "9200 113TH ST. N. STE 305"
-    const OFFICE_SUITE: &str = "OFFICE SUITE:";
-    const STE: &str = "STE";
-    for idx in (0..lnes.len()).rev() {
-        if lnes[idx].contains(OFFICE_SUITE) {
-            lnes[idx] = lnes[idx].replace(OFFICE_SUITE, STE);
-        }
-    }
-}
-
 pub fn edit_starting_hash(lnes: &mut [String]) {
     // Remove (#).
     // "#3 TENNESSEE AVENUE" -> "3 TENNESSEE AVENUE"
+    // Invalid case: "1000 GLENN HEARN BOULEVARD", "#20127"
     for lne in lnes.iter_mut() {
-        if lne.starts_with('#') && lne.len() > 1 {
+        if lne.starts_with('#') && lne.len() > 1 && !lne.chars().skip(1).all(|c| c.is_ascii_digit())
+        {
             *lne = lne[1..].to_string();
         }
     }
@@ -707,6 +577,18 @@ pub fn edit_empty(lnes: &mut Vec<String>) {
     for idx in (0..lnes.len()).rev() {
         if lnes[idx].is_empty() {
             lnes.remove(idx);
+        }
+    }
+}
+
+pub fn edit_nbsp(lnes: &mut [String]) {
+    // non-breaking space
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx].contains('\u{a0}') {
+            lnes[idx] = lnes[idx]
+                .chars()
+                .map(|c| if c == '\u{a0}' { ' ' } else { c })
+                .collect();
         }
     }
 }
@@ -794,11 +676,27 @@ pub fn ends_with_zip5(lne: &str) -> Option<String> {
         // Check 5 digit zip.
         let zip: String = lne.chars().skip(lne.chars().count() - LEN_ZIP5).collect();
         if is_zip5(&zip) {
-            // Edge case checks.
-            // Check for too many digits, 123456.
-            // Check for invalid zip, 12345-67890.
+            // Check for invalid cases.
+            //  - Too many digits: "123456".
+            //  - 10 char zip: "12345-67890".
+            //  - Unit number: "#20127".
+            //  - Room number: "ROOM 20100".
+            //  - Suite number: "SUITE 20350".
+            //  - Box number: "BOX 22201".
+            const IDX_ROOM: usize = 10;
+            if lne.len() >= IDX_ROOM && lne[lne.len() - IDX_ROOM..].starts_with("ROOM") {
+                return None;
+            }
+            const IDX_SUITE: usize = 11;
+            if lne.len() >= IDX_SUITE && lne[lne.len() - IDX_SUITE..].starts_with("SUITE") {
+                return None;
+            }
+            const IDX_BOX: usize = 9;
+            if lne.len() >= IDX_BOX && lne[lne.len() - IDX_BOX..].starts_with("BOX") {
+                return None;
+            }
             if let Some(c) = lne.chars().rev().nth(LEN_ZIP5) {
-                if !c.is_ascii_digit() && c != ZIP_DASH {
+                if !c.is_ascii_digit() && c != ZIP_DASH && c != '#' {
                     return Some(zip);
                 }
             }
@@ -813,9 +711,10 @@ pub fn ends_with_zip5(lne: &str) -> Option<String> {
 /// Specified string expected to be longer than 10 characters.
 pub fn ends_with_zip10(lne: &str) -> Option<String> {
     // Disallow exact match.
-    if lne.len() > LEN_ZIP10 {
+    let chr_len = lne.chars().count();
+    if chr_len > LEN_ZIP10 {
         // Check 10 digit zip.
-        let zip: String = lne.chars().skip(lne.chars().count() - LEN_ZIP10).collect();
+        let zip: String = lne.chars().skip(chr_len - LEN_ZIP10).collect();
         if is_zip10(&zip) {
             return Some(zip);
         }
@@ -1229,13 +1128,18 @@ mod tests {
     #[test]
     fn test_ends_with_zip5_invalid() {
         let cases = vec![
+            "#20127",                           // Address unit number
             "123456",                           // Too many digits
             "Address with 1234",                // Less than 5 digits
             "Zip 1234-5678",                    // Invalid zip with too many digits after dash
             "Random text",                      // No zip code
             "45678-1234",                       // Valid 9-digit zip
             "Address with zip code 12345-6789", // Valid 9-digit zip
-            "P.O. BOX 9023958",
+            "P.O. BOX 9023958",                 // PO box number
+            "BOX 22201",                        // Box number
+            "ROOM 20100",                       // Room number
+            "SUITE 20350",                      // Suite number
+            
         ];
 
         for input in cases {
@@ -1309,7 +1213,10 @@ mod tests {
             "Text with 12345-678",     // Less than 4 digits after dash
             "Random text",             // No zip code
             "Another text 1234-56789", // Only 4 digits before dash
-            "P.O. BOX 9023958",
+            "P.O. BOX 9023958",        // PO box number
+            "BOX 22201",               // Box number
+            "ROOM 20100",              // Room number
+            "SUITE 20350",             // Suite number
         ];
 
         for input in cases {
