@@ -36,33 +36,11 @@ impl Military {
                 // Read from disk.
                 house_from_disk
             }
-            Err(err) => {
-                // File not available.
-                eprintln!("read file {}: err: {}", FLE_PTH, err);
-
+            Err(_) => {
                 let mut military = Military::new();
 
-                // Fetch list of people from network.
-                // URL of the US Department of Defense page.
-                const URL: &str = "https://www.defense.gov/Contact/Mailing-Addresses/";
-
-                // Fetch the members directory webpage.
-                let cli = Client::new();
-                let html = fetch_html(URL, &cli).await?;
-
-                // Extract members from html.
-                military.extract_members(&html);
-
-                // Validate members fields.
-                military.validate_members()?;
-
-                // Standardize addresses.
-                military.standardize_addresses().await?;
-
-                // eprintln!("{:?}", military);
-
-                // Write members to disk.
-                write_to_file(&military, FLE_PTH)?;
+                // Fetch members.
+                military.fetch_members().await?;
 
                 military
             }
@@ -73,17 +51,18 @@ impl Military {
         Ok(military)
     }
 
-    /// Extract members from the specified html.
-    pub fn extract_members(&mut self, html: &str) {
-        let prsr = &Prsr::new();
-        let document = Html::parse_document(html);
+    /// Fetch members from network.
+    pub async fn fetch_members(&mut self) -> Result<()> {
+        let url = "https://www.defense.gov/Contact/Mailing-Addresses/";
+        let html = fetch_html(url).await?;
+        let document = Html::parse_document(&html);
         let selector = Selector::parse("div.address-each").unwrap();
         for elm in document.select(&selector) {
             // Get lines and filter.
             let mut cur_lnes = elm
                 .text()
                 .map(|s| s.trim().to_string())
-                .filter(|s| prsr.filter(s))
+                .filter(|s| PRSR.filter(s))
                 .collect::<Vec<String>>();
             eprintln!("{cur_lnes:?}");
 
@@ -100,6 +79,13 @@ impl Military {
             if let Some(idx) = per.title1.find("OF DEFENSE ") {
                 per.title2 = per.title1[idx + 11..].trim().into();
                 per.title1.truncate(idx + 11 - 1);
+            }
+            // Validate person.
+            if per.name_fst.is_empty() {
+                return Err(anyhow!("person: name_fst empty {:?}", per));
+            }
+            if per.title1.is_empty() {
+                return Err(anyhow!("person: title empty {:?}", per));
             }
 
             // Parse address.
@@ -125,49 +111,17 @@ impl Military {
             // eprintln!("    {lne}");
             // eprintln!("  {adr:?}");
 
-            per.adrs = Some(vec![adr]);
+            let mut adrs = vec![adr];
+            adrs = standardize_addresses(adrs).await?;
+
+            per.adrs = Some(adrs);
             self.persons.push(per);
-        }
-    }
 
-    pub async fn standardize_addresses(&mut self) -> Result<()> {
-        let mut cli = &Client::new();
-        for per in self.persons.iter_mut() {
-            let mut adrs = per.adrs.as_mut().unwrap();
-            standardize_addresses(adrs, cli).await?;
-            eprintln!("  {}", adrs[0]);
+            // Checkpoint save.
+            // Write intermediate file to disk.
+            write_to_file(&self, FLE_PTH)?;
         }
 
         Ok(())
-    }
-
-    pub fn validate_members(&mut self) -> Result<()> {
-        for per in &self.persons {
-            if per.name_fst.is_empty() {
-                return Err(anyhow!("person: name_fst empty {:?}", per));
-            }
-            if per.title1.is_empty() {
-                return Err(anyhow!("person: title empty {:?}", per));
-            }
-            validate_addresses(per, per.adrs.as_deref().unwrap())?;
-        }
-
-        Ok(())
-    }
-}
-
-pub fn edit_title_military(lnes: &mut [String]) {
-    // Remove dots.
-    // "DR. WILLIAM" -> "WILLIAM"
-    // "GENERAL CHARLES" -> "CHARLES"
-    // "ADMIRAL CHRISTOPHER" -> "CHRISTOPHER"
-    for lne in lnes.iter_mut() {
-        if lne.starts_with("DR. ") {
-            *lne = lne.replace("DR. ", "");
-        } else if lne.starts_with("GENERAL ") {
-            *lne = lne.replace("GENERAL ", "");
-        } else if lne.starts_with("ADMIRAL ") {
-            *lne = lne.replace("ADMIRAL ", "");
-        }
     }
 }

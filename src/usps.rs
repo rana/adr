@@ -1,28 +1,30 @@
-use crate::models::Address;
+use crate::core::*;
+use crate::models::*;
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use StdAdr::*;
 
-pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result<()> {
+pub async fn standardize_addresses(mut adrs: Vec<Address>) -> Result<Vec<Address>> {
     // The USPS prefers that secondary address designators such as "APT" (Apartment) or "STE" (Suite) appear on the same line as the street address when there is enough space. However, it is also acceptable for these designators to appear on a separate line if needed, typically as Address Line 2.
+    eprintln!("{}", AddressList(adrs.clone()));
 
     for adr in adrs.iter_mut() {
         eprintln!("Attempting to standardize by combining address lines.");
-        match standardize_address(adr, AsIs, false, cli).await {
+        match standardize_address(adr, AsIs, false).await {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("standardize_addresses: err1: {}", err);
 
                 eprintln!("Attempting to standardize without combining address lines.");
-                match standardize_address(adr, CombineAdr1Adr2, false, cli).await {
+                match standardize_address(adr, CombineAdr1Adr2, false).await {
                     Ok(_) => {}
                     Err(err) => {
                         eprintln!("standardize_addresses: err2: {}", err);
 
                         eprintln!("Attempting to standardize by swapping address lines.");
-                        match standardize_address(adr, SwapAdr1Adr2, false, cli).await {
+                        match standardize_address(adr, SwapAdr1Adr2, false).await {
                             Ok(_) => {}
                             Err(err) => {
                                 eprintln!("standardize_addresses: err3: {}", err);
@@ -31,7 +33,7 @@ pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result
                                 eprintln!("Attempting to standardize address without zip.");
                                 adr.zip = "".into();
                                 eprintln!("  {}", adr);
-                                standardize_address(adr, AsIs, true, cli).await?;
+                                standardize_address(adr, AsIs, true).await?;
                             }
                         }
                     }
@@ -40,7 +42,9 @@ pub async fn standardize_addresses(adrs: &mut [Address], cli: &Client) -> Result
         }
     }
 
-    Ok(())
+    eprintln!("{}", AddressList(adrs.clone()));
+
+    Ok(adrs)
 }
 
 #[derive(PartialEq)]
@@ -53,9 +57,7 @@ pub async fn standardize_address(
     adr: &mut Address,
     approach: StdAdr,
     drop_zip: bool,
-    cli: &Client,
 ) -> Result<()> {
-    let client = Client::new();
     let mut prms: Vec<(&str, String)> = Vec::with_capacity(5);
     match approach {
         AsIs => {
@@ -95,7 +97,7 @@ pub async fn standardize_address(
         prms.push(("zip", adr.zip.clone()));
     }
 
-    let response = cli
+    let response = CLI
         .post("https://tools.usps.com/tools/app/ziplookup/zipByAddress")
         .form(&prms)
         .send()

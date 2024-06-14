@@ -19,3 +19,4 @@ anyhow = "1.0.86"
 usps-oauth-sdk = { git = "https://github.com/rana/usps-oauth-sdk.git", version = "3.0.1" }
 usps-addresses-sdk = { git = "https://github.com/rana/usps-addresses-sdk.git", version = "3.0.2" }
 regex = "1.10.4"
+lazy_static = "1.4.0"

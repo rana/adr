@@ -3,7 +3,6 @@ use crate::models::*;
 use crate::prsr::*;
 use crate::usps::*;
 use anyhow::{anyhow, Result};
-use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -12,6 +11,9 @@ use std::ops::Add;
 use std::path::Path;
 
 const FLE_PTH: &str = "senate.json";
+
+/// The U.S. Senate consists of 100 members, with each of the 50 states represented by two senators regardless of population size.
+const CAP_PER: usize = 100;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Senate {
@@ -22,30 +24,21 @@ pub struct Senate {
 
 impl Senate {
     pub fn new() -> Self {
-        // The U.S. Senate consists of 100 members, with each of the 50 states represented by two senators regardless of population size.
         Self {
             name: "U.S. Senate".into(),
             role: Role::Political,
-            persons: Vec::with_capacity(441),
+            persons: Vec::with_capacity(CAP_PER),
         }
     }
 
     pub async fn load() -> Result<Senate> {
         // Read file from disk.
-        let senate = match read_from_file::<Senate>(FLE_PTH) {
-            Ok(senate_from_disk) => {
-                // Read from disk.
-                senate_from_disk
-            }
-            Err(err) => {
-                // File not available.
-                eprintln!("read file {}: err: {}", FLE_PTH, err);
-
+        let mut senate = match read_from_file::<Senate>(FLE_PTH) {
+            Ok(senate_from_disk) => senate_from_disk,
+            Err(_) => {
                 let mut senate = Senate::new();
 
-                // Fetch list of members from network.
-                // Fetch two senators from each senate state pagge.
-                let cli = Client::new();
+                // Fetch members.
                 let states = vec![
                     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
                     "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
@@ -53,15 +46,9 @@ impl Senate {
                     "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
                 ];
                 for state in states {
-                    let url = format!("https://www.senate.gov/states/{state}/intro.htm");
-                    let html = fetch_html(&url, &cli).await?;
-
-                    // Extract members from html.
-                    senate.extract_members(&html);
+                    let per = senate.fetch_member(state).await?;
+                    senate.persons.push(per);
                 }
-
-                // Validate member fields.
-                senate.validate_members()?;
 
                 // Write file to disk.
                 write_to_file(&senate, FLE_PTH)?;
@@ -72,23 +59,25 @@ impl Senate {
 
         println!("{} senators", senate.persons.len());
 
+        // Fetch addresses.
+        senate.fetch_adrs().await?;
+
         Ok(senate)
     }
 
-    /// Extract members from the specified html.
-    pub fn extract_members(&mut self, html: &str) {
-        let document = Html::parse_document(html);
+    /// Fetch member from network.
+    pub async fn fetch_member(&self, state: &str) -> Result<Person> {
+        let url = format!("https://www.senate.gov/states/{state}/intro.htm");
+        let html = fetch_html(&url).await?;
+        let document = Html::parse_document(&html);
+        let mut per = Person::default();
 
-        // Define the selector for the "div.state-column"
-        let state_column_selector = Selector::parse("div.state-column").expect("Invalid selector");
-
-        // Define the selector for extracting the full name and URL within the "div.state-column"
-        let link_selector = Selector::parse("a").expect("Invalid selector");
-
-        // Iterate over the "div.state-column" elements and extract the required information
-        for element in document.select(&state_column_selector) {
-            if let Some(link_element) = element.select(&link_selector).next() {
-                let full_name = link_element.text().collect::<Vec<_>>().concat();
+        // Select name and url.
+        let name_sel = Selector::parse("div.state-column").expect("Invalid selector");
+        let url_sel = Selector::parse("a").expect("Invalid selector");
+        for elm_doc in document.select(&name_sel) {
+            if let Some(elm_url) = elm_doc.select(&url_sel).next() {
+                let full_name = elm_url.text().collect::<Vec<_>>().concat();
                 // Select first name and last name.
                 // Full name may have middle name or suffix.
                 let names = full_name
@@ -96,63 +85,52 @@ impl Senate {
                     .filter(|&w| w != "Jr." && w != "III")
                     .map(|w| w.trim_end_matches(','))
                     .collect::<Vec<_>>();
-                let name_fst = names[0].trim().to_string();
-                let name_lst = names[names.len() - 1].trim().to_string();
-                let url = link_element
+                per.name_fst = names[0].trim().to_string();
+                per.name_lst = names[names.len() - 1].trim().to_string();
+                per.url = elm_url
                     .value()
                     .attr("href")
                     .unwrap_or_default()
                     .replace("www.", "")
                     .trim_end_matches('/')
                     .to_string();
-                let per = Person {
-                    name_fst,
-                    name_lst,
-                    url,
-                    ..Default::default()
-                };
-                eprintln!("{per}");
-                self.persons.push(per);
+
+                // Validate fields.
+                if per.name_fst.is_empty() {
+                    return Err(anyhow!("first name empty {:?}", per));
+                }
+                if per.name_lst.is_empty() {
+                    return Err(anyhow!("last name empty {:?}", per));
+                }
+                if per.url.is_empty() {
+                    return Err(anyhow!("url empty {:?}", per));
+                }
+                if !per.url.ends_with(".senate.gov") {
+                    return Err(anyhow!("url doesn't end with '.senate.gov' {:?}", per));
+                }
+                break;
             }
         }
-    }
 
-    pub fn validate_members(&self) -> Result<()> {
-        for (idx, rep) in self.persons.iter().enumerate() {
-            if rep.name_fst.is_empty() {
-                return Err(anyhow!("senate: first name empty (idx:{} {:?})", idx, rep));
-            }
-            if rep.name_lst.is_empty() {
-                return Err(anyhow!("senate: last name empty (idx:{} {:?})", idx, rep));
-            }
-            if rep.url.is_empty() {
-                return Err(anyhow!("senate: url empty (idx:{} {:?})", idx, rep));
-            }
-            if !rep.url.ends_with(".senate.gov") {
-                return Err(anyhow!(
-                    "senate: url doesn't end with '.senate.gov' (idx:{} {:?})",
-                    idx,
-                    rep
-                ));
-            }
+        if per.name_fst.is_empty() {
+            eprintln!("{url}");
+            return Err(anyhow!("unable to extract member for {state}"));
         }
-        Ok(())
+
+        Ok(per)
     }
 
-    pub async fn fetch_addresses(&mut self) -> Result<()> {
-        let cli = &Client::new();
-        let prsr = &Prsr::new();
-
-        // Clone self before iterating over self.persons to avoid borrowing conflicts.
-        // For checkpoint saving.
+    pub async fn fetch_adrs(&mut self) -> Result<()> {
+        // Clone self for file writing.
         let mut self_clone = self.clone();
         let per_len = self.persons.len() as f64;
-        for (idx, mut per) in self
+
+        for (idx, per) in self_clone
             .persons
-            .iter_mut()
+            .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-            //.take(1)
+        //.take(1)
         {
             let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
             eprintln!(
@@ -160,134 +138,120 @@ impl Senate {
                 pct, idx, per.name_fst, per.name_lst, per.url
             );
 
-            match fetch_and_parse_person(&mut self_clone, idx, per, cli).await {
-                Err(err) => {
-                    return Err(err);
+            match self.fetch_prs_per(idx, per).await? {
+                Some(adrs) => {
+                    self.persons[idx].adrs = Some(adrs);
                 }
-                Ok(fetched_adrs) => {
-                    if !fetched_adrs {
-                        // Fetch addresses into person.
-                        let url_pathss = [
-                            vec!["contact"],
-                            vec!["contact/locations"],
-                            vec!["contact/offices"],
-                            vec!["contact/office-locations"],
-                            vec!["office-locations"],
-                            vec!["offices"],
-                            vec!["office-locations"],
-                            vec!["office-information"],
-                            vec![""],
-                            vec!["public"],
-                            vec!["public/index.cfm/office-locations"],
-                        ];
-                        for url_paths in url_pathss {
-                            if fetch_parse_adrs(&mut self_clone, idx, per, &url_paths, cli, prsr)
-                                .await?
-                            {
+                None => {
+                    // Fetch addresses into person.
+                    let url_pathss = [
+                        vec!["contact"],
+                        vec!["contact/locations"],
+                        vec!["contact/offices"],
+                        vec!["contact/office-locations"],
+                        vec!["office-locations"],
+                        vec!["offices"],
+                        vec!["office-locations"],
+                        vec!["office-information"],
+                        vec![""],
+                        vec!["public"],
+                        vec!["public/index.cfm/office-locations"],
+                    ];
+                    for url_paths in url_pathss {
+                        match self.fetch_prs_adrs(per, &url_paths).await? {
+                            None => {}
+                            Some(adrs) => {
+                                self.persons[idx].adrs = Some(adrs);
                                 break;
                             }
                         }
                     }
                 }
             }
+
+            // Checkpoint save.
+            // Write intermediate file to disk.
+            write_to_file(&self, FLE_PTH)?;
         }
 
         Ok(())
     }
-}
 
-pub async fn fetch_parse_adrs(
-    self_clone: &mut Senate,
-    idx: usize,
-    per: &mut Person,
-    url_paths: &[&str],
-    cli: &Client,
-    prsr: &Prsr,
-) -> Result<bool> {
-    // Fetch one or more pages of adress lines.
-    let mut adr_lnes_o: Option<Vec<String>> = None;
-    for url_path in url_paths {
-        match fetch_adr_lnes(per, url_path, cli, prsr).await? {
-            None => {}
-            Some(new_lnes) => {
-                if adr_lnes_o.is_none() {
-                    adr_lnes_o = Some(new_lnes);
-                } else {
-                    let mut adr_lnes = adr_lnes_o.unwrap();
-                    adr_lnes.extend(new_lnes);
-                    adr_lnes_o = Some(adr_lnes);
+    pub async fn fetch_prs_adrs(
+        &self,
+        per: &Person,
+        url_paths: &[&str],
+    ) -> Result<Option<Vec<Address>>> {
+        // Fetch one or more pages of adress lines.
+        let mut adr_lnes_o: Option<Vec<String>> = None;
+        for url_path in url_paths {
+            match fetch_adr_lnes(per, url_path).await? {
+                None => {}
+                Some(new_lnes) => {
+                    if adr_lnes_o.is_none() {
+                        adr_lnes_o = Some(new_lnes);
+                    } else {
+                        let mut adr_lnes = adr_lnes_o.unwrap();
+                        adr_lnes.extend(new_lnes);
+                        adr_lnes_o = Some(adr_lnes);
+                    }
                 }
             }
         }
+
+        // Parse lines to Addresses.
+        let adrs_o = match adr_lnes_o {
+            None => None,
+            Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
+                None => None,
+                Some(mut adrs) => Some(standardize_addresses(adrs).await?),
+            },
+        };
+
+        Ok(adrs_o)
     }
 
-    // Parse lines to Addresses.
-    match adr_lnes_o {
-        None => return Ok(false),
-        Some(mut adr_lnes) => {
-            match prsr.parse_addresses(per, &adr_lnes) {
-                None => return Ok(false),
-                Some(mut adrs) => {
-                    // filter_invalid_addresses(per, &mut adrs);
-
-                    // validate_addresses(per, &adrs)?;
-
-                    // eprintln!("{}", AddressList(adrs.clone()));
-
-                    // standardize_addresses(&mut adrs, cli).await?;
-
-                    // // Write intermediate results to file.
-                    // // Clone adrs for checkpoint save.
-                    // let adrs_clone = adrs.clone();
-                    // self_clone.persons[idx].adrs = Some(adrs_clone);
-                    // write_to_file(&self_clone, FLE_PTH)?;
-
-                    // eprintln!("{}", AddressList(adrs.clone()));
-
-                    // per.adrs = Some(adrs);
-                    process_parsed_addresses(self_clone, idx, per, &mut adrs, cli).await?;
+    pub async fn fetch_prs_per(
+        &self,
+        idx: usize,
+        per: &Person,
+    ) -> Result<Option<Vec<Address>>> {
+        match (per.name_fst.as_str(), per.name_lst.as_str()) {
+            ("John", "Hickenlooper") => {
+                let url = "https://hickenlooper.senate.gov/wp-json/wp/v2/locations";
+                let response = reqwest::get(url).await?.text().await?;
+                let locations: Vec<Location> = serde_json::from_str(&response)?;
+                let mut adrs: Vec<Address> = locations
+                    .into_iter()
+                    .map(|location| location.acf.into())
+                    .collect();
+                for idx in (0..adrs.len()).rev() {
+                    if adrs[idx].address1 == "~" {
+                        adrs.remove(idx);
+                    } else if adrs[idx].address1.starts_with("2 Constitution Ave") {
+                        // Russell Senate Office Building
+                        // 2 Constitution Ave NE,Suite SR-374
+                        if let Some(adr2) = adrs[idx].address2.clone() {
+                            if let Some(idx_fnd) = adr2.find("SR-") {
+                                let mut adr1 = adr2[idx_fnd + 3..].to_string();
+                                adr1.push_str(" RUSSELL SOB");
+                                adrs[idx].address1 = adr1;
+                                adrs[idx].address2 = None;
+                            }
+                        }
+                    }
                 }
+                return Ok(Some(standardize_addresses(adrs).await?));
             }
+            ("", "") => {}
+            _ => {}
         }
+
+        Ok(None)
     }
-
-    Ok(true)
 }
 
-pub async fn process_parsed_addresses(
-    self_clone: &mut Senate,
-    idx: usize,
-    per: &mut Person,
-    mut adrs: &mut Vec<Address>,
-    cli: &Client,
-) -> Result<()> {
-    filter_invalid_addresses(per, adrs);
-
-    validate_addresses(per, adrs)?;
-
-    eprintln!("{}", AddressList(adrs.clone()));
-
-    standardize_addresses(adrs, cli).await?;
-
-    // Write intermediate results to file.
-    // Clone adrs for checkpoint save.
-    let adrs_clone = adrs.clone();
-    self_clone.persons[idx].adrs = Some(adrs_clone);
-    write_to_file(&self_clone, FLE_PTH)?;
-
-    eprintln!("{}", AddressList(adrs.clone()));
-
-    per.adrs = Some(adrs.to_vec());
-
-    Ok(())
-}
-
-pub async fn fetch_adr_lnes(
-    per: &mut Person,
-    url_path: &str,
-    cli: &Client,
-    prsr: &Prsr,
-) -> Result<Option<Vec<String>>> {
+pub async fn fetch_adr_lnes(per: &Person, url_path: &str) -> Result<Option<Vec<String>>> {
     // Some representative addresses are in a contact webpage.
 
     // Fetch a URL.
@@ -296,7 +260,7 @@ pub async fn fetch_adr_lnes(
         url.push('/');
         url.push_str(url_path);
     }
-    let html = fetch_html(url.as_str(), cli).await?;
+    let html = fetch_html(url.as_str()).await?;
 
     // Parse HTML.
     let document = Html::parse_document(&html);
@@ -332,7 +296,7 @@ pub async fn fetch_adr_lnes(
             // Filter separately to allow debugging.
             cur_lnes = cur_lnes
                 .into_iter()
-                .filter(|s| prsr.filter(s))
+                .filter(|s| PRSR.filter(s))
                 .collect::<Vec<String>>();
 
             eprintln!("{cur_lnes:?}");
@@ -351,7 +315,7 @@ pub async fn fetch_adr_lnes(
     edit_dot(&mut lnes);
     edit_nbsp(&mut lnes);
     edit_person_senate_lnes(per, &mut lnes);
-    prsr.edit_lnes(&mut lnes);
+    PRSR.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
     edit_sob(&mut lnes);
     edit_split_comma(&mut lnes);
@@ -363,7 +327,7 @@ pub async fn fetch_adr_lnes(
     eprintln!("--- post: {lnes:?}");
 
     // At least one office in home state, and one in DC.
-    if prsr.two_zip_or_more(&lnes) {
+    if PRSR.two_zip_or_more(&lnes) {
         return Ok(Some(lnes));
     }
 
@@ -546,47 +510,6 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
         ("", "") => {}
         _ => {}
     }
-}
-
-pub async fn fetch_and_parse_person(
-    self_clone: &mut Senate,
-    idx: usize,
-    per: &mut Person,
-    cli: &Client,
-) -> Result<bool> {
-    match (per.name_fst.as_str(), per.name_lst.as_str()) {
-        ("John", "Hickenlooper") => {
-            let url = "https://hickenlooper.senate.gov/wp-json/wp/v2/locations";
-            let response = reqwest::get(url).await?.text().await?;
-            let locations: Vec<Location> = serde_json::from_str(&response)?;
-            let mut adrs: Vec<Address> = locations
-                .into_iter()
-                .map(|location| location.acf.into())
-                .collect();
-            for idx in (0..adrs.len()).rev() {
-                if adrs[idx].address1 == "~" {
-                    adrs.remove(idx);
-                } else if adrs[idx].address1.starts_with("2 Constitution Ave") {
-                    if let Some(adr2) = adrs[idx].address2.clone() {
-                        if let Some(idx_fnd) = adr2.find("SR-") {
-                            let mut adr1 = adr2[idx_fnd + 3..].to_string();
-                            adr1.push_str(" RUSSELL SOB");
-                            adrs[idx].address1 = adr1;
-                            adrs[idx].address2 = None;
-                        }
-                    }
-                }
-                // Russell Senate Office Building
-                // 2 Constitution Ave NE,Suite SR-374
-            }
-            process_parsed_addresses(self_clone, idx, per, &mut adrs, cli).await?;
-            return Ok(true);
-        }
-        ("", "") => {}
-        _ => {}
-    }
-
-    Ok(false)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

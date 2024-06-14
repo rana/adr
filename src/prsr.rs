@@ -1,10 +1,13 @@
-use std::char;
-use std::clone;
-
 use crate::models::*;
 use crate::usps::*;
 use anyhow::{anyhow, Result};
 use regex::Regex;
+use std::char;
+use std::clone;
+
+lazy_static! {
+    pub static ref PRSR: Prsr = Prsr::new();
+}
 
 pub struct Prsr {
     /// A regex matching a floating point number:
@@ -102,7 +105,7 @@ impl Prsr {
             && !self.re_phone.is_match(s)
             && !self.re_flt.is_match(s)
             && !s.contains("PHONE")
-            && !s.contains("FAX")
+            // && !s.contains("FAX") // Invalid case: FAIRFAX
             && !s.contains("OFFICE OF")
             && !s.starts_with("P: ")
             && !s.starts_with("F: ")
@@ -122,7 +125,7 @@ impl Prsr {
         self.edit_split_city_state_zip(lnes);
         // eprintln!("(4) {lnes:?}");
         edit_drain_after_last_zip(lnes);
-        //eprintln!("(5) {lnes:?}");
+        eprintln!("(5) {lnes:?}");
         edit_single_comma(lnes);
     }
 
@@ -133,7 +136,7 @@ impl Prsr {
         self.re_name_initials.replace_all(full_name, "").to_string()
     }
 
-    pub fn parse_addresses(&self, per: &Person, lnes: &[String]) -> Option<Vec<Address>> {
+    pub fn prs_adrs(&self, lnes: &[String]) -> Option<Vec<Address>> {
         // eprintln!("--- parse_addresses: {lnes:?}");
 
         // Start from the bottom.
@@ -194,8 +197,7 @@ impl Prsr {
         }
 
         // Most have one office in state and DC.
-        // US Virgin Islands has 1 valid address in DC.
-        if adrs.is_empty() {
+        if adrs.len() < 2 {
             return None;
         }
 
@@ -274,36 +276,6 @@ impl Prsr {
     }
 }
 
-pub fn filter_invalid_addresses(per: &Person, adrs: &mut Vec<Address>) -> Result<()> {
-    for idx in (0..adrs.len()).rev() {
-        if adrs[idx].address1 == "146 N STATE AVENUE" && adrs[idx].city == "SOMERTON" {
-            adrs.remove(idx);
-        }
-    }
-
-    Ok(())
-}
-
-pub fn validate_addresses(per: &Person, adrs: &[Address]) -> Result<()> {
-    for (idx, adr) in adrs.iter().enumerate() {
-        if adr.address1.is_empty() {
-            return Err(anyhow!("address: address1 empty {:?}", adr));
-        }
-        // address2 may be None.
-        if adr.city.is_empty() {
-            return Err(anyhow!("address: city empty {:?}", adr));
-        }
-        if adr.state.is_empty() {
-            return Err(anyhow!("address: state empty {:?}", adr));
-        }
-        if adr.zip.is_empty() {
-            return Err(anyhow!("address: zip empty {:?}", adr));
-        }
-    }
-
-    Ok(())
-}
-
 pub fn edit_split_bar(lnes: &mut Vec<String>) {
     // "WELLS FARGO PLAZA | 221 N. KANSAS STREET | SUITE 1500", "EL PASO, TX 79901 |"
     for idx in (0..lnes.len()).rev() {
@@ -341,18 +313,21 @@ pub fn edit_sob(lnes: &mut Vec<String>) {
             lnes.remove(idx);
         }
 
-        if !(lnes[idx].contains("HART")
-            || lnes[idx].contains("DIRKSEN")
-            || lnes[idx].contains("RUSSELL"))
+        const HART: &str = "HART";
+        const DIRKSEN: &str = "DIRKSEN";
+        const RUSSELL: &str = "RUSSELL";
+        if !(lnes[idx].contains(HART)
+            || lnes[idx].contains(DIRKSEN)
+            || lnes[idx].contains(RUSSELL))
         {
             continue;
         }
 
         // "509 HART", "SENATE OFFICE BLDG"
         if idx + 1 != lnes.len()
-            && (lnes[idx].ends_with("HART")
-                || lnes[idx].ends_with("DIRKSEN")
-                || lnes[idx].ends_with("RUSSELL"))
+            && (lnes[idx].ends_with(HART)
+                || lnes[idx].ends_with(DIRKSEN)
+                || lnes[idx].ends_with(RUSSELL))
             && lnes[idx + 1].starts_with("SENATE OFFICE")
         {
             lnes[idx].push_str(" SOB");
@@ -417,6 +392,14 @@ pub fn edit_sob(lnes: &mut Vec<String>) {
             lnes[idx] = adr1;
             lnes.remove(idx + 1);
         }
+
+        if lnes[idx].contains(HART) {
+            lnes[idx] = lnes[idx].replace("HART SOB", "HSOB");
+        } else if lnes[idx].contains(DIRKSEN) {
+            lnes[idx] = lnes[idx].replace("DIRKSEN SOB", "DSOB");
+        } else if lnes[idx].contains(RUSSELL) {
+            lnes[idx] = lnes[idx].replace("RUSSELL SOB", "RSOB");
+        }
     }
 }
 
@@ -431,9 +414,12 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
             lnes.remove(idx);
         }
 
-        if !(lnes[idx].contains("CANNON")
-            || lnes[idx].contains("LONGWORTH")
-            || lnes[idx].contains("RAYBURN"))
+        const CANNON: &str = "CANNON";
+        const LONGWORTH: &str = "LONGWORTH";
+        const RAYBURN: &str = "RAYBURN";
+        if !(lnes[idx].contains(CANNON)
+            || lnes[idx].contains(LONGWORTH)
+            || lnes[idx].contains(RAYBURN))
         {
             continue;
         }
@@ -460,25 +446,21 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
         if let Some(idx_fnd) = lnes[idx].find("HOUSE OFFICE") {
             lnes[idx].truncate(idx_fnd);
             lnes[idx].push_str("HOB");
-            // No break. Can have duplicate addresses.
         }
 
         // 2205 RAYBURN OFFICE BUILDING
         if let Some(idx_fnd) = lnes[idx].find("OFFICE BUILDING") {
             lnes[idx].truncate(idx_fnd);
             lnes[idx].push_str("HOB");
-            // No break. Can have duplicate addresses.
         }
 
         // 2205 RAYBURN BUILDING
         if let Some(idx_fnd) = lnes[idx].find("BUILDING") {
             lnes[idx].truncate(idx_fnd);
             lnes[idx].push_str("HOB");
-            // No break. Can have duplicate addresses.
         }
 
         // "LONGWORTH HOB", "ROOM 1027"
-        // Still check for ends with HOB as some addresses may originally have it.
         if idx + 1 != lnes.len()
             && lnes[idx + 1].contains("ROOM")
             && lnes[idx].trim().ends_with("HOB")
@@ -486,6 +468,14 @@ pub fn edit_hob(lnes: &mut Vec<String>) {
             let room: Vec<&str> = lnes[idx + 1].split_whitespace().collect();
             lnes[idx] = format!("{} {}", room[1], lnes[idx]);
             lnes.remove(idx + 1);
+        }
+
+        if lnes[idx].contains(CANNON) {
+            lnes[idx] = lnes[idx].replace("CANNON HOB", "CHOB");
+        } else if lnes[idx].contains(LONGWORTH) {
+            lnes[idx] = lnes[idx].replace("LONGWORTH HOB", "LHOB");
+        } else if lnes[idx].contains(RAYBURN) {
+            lnes[idx] = lnes[idx].replace("RAYBURN HOB", "RHOB");
         }
     }
 }
@@ -1139,7 +1129,6 @@ mod tests {
             "BOX 22201",                        // Box number
             "ROOM 20100",                       // Room number
             "SUITE 20350",                      // Suite number
-            
         ];
 
         for input in cases {

@@ -1,5 +1,4 @@
 use crate::models::*;
-
 use anyhow::{anyhow, Result};
 use csv::Writer;
 use reqwest::Client;
@@ -10,6 +9,10 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+
+lazy_static! {
+    pub static ref CLI: Client = Client::new();
+}
 
 /// Serializes a JSON struct to a file.
 pub fn write_to_file<T: Serialize>(data: &T, file_path: &str) -> Result<()> {
@@ -30,7 +33,7 @@ pub fn read_from_file<T: for<'de> Deserialize<'de>>(file_path: &str) -> Result<T
 }
 
 /// Fetches HTML from a URL and caches the response body to a local file.
-pub async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
+pub async fn fetch_html(url: &str) -> Result<String> {
     let cache_dir = Path::new(".cache");
     let cache_file = cache_dir.join(url_to_filename(url));
 
@@ -47,7 +50,7 @@ pub async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
     }
 
     eprintln!("Fetching {url:?}...");
-    let res = cli.get(url).send().await?;
+    let res = CLI.get(url).send().await?;
     let bdy = res.text().await?;
 
     // Save the fetched body to the cache file
@@ -57,7 +60,6 @@ pub async fn fetch_html(url: &str, cli: &Client) -> Result<String> {
     Ok(bdy)
 }
 
-
 /// Converts a URL to a safe filename by replacing non-alphanumeric characters.
 fn url_to_filename(url: &str) -> String {
     // Skip https://
@@ -66,23 +68,6 @@ fn url_to_filename(url: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect()
 }
-
-// // Safely get a substring from the end of a string.
-// pub fn safe_slice_from_end(s: &str, len: usize) -> &str {
-//     if len > s.len() {
-//         return s; // If the requested length is greater than the string length, return the entire string
-//     }
-//     let mut char_indices = s.char_indices().rev();
-//     let mut byte_index = s.len();
-//     for _ in 0..len {
-//         if let Some((idx, _)) = char_indices.next() {
-//             byte_index = idx;
-//         } else {
-//             break;
-//         }
-//     }
-//     &s[byte_index..]
-// }
 
 #[cfg(test)]
 mod tests {
@@ -100,13 +85,13 @@ mod tests {
         let test_url = "https://www.google.com";
 
         // First call should fetch and cache the content
-        let result = runtime.block_on(fetch_html(test_url, &cli));
+        let result = runtime.block_on(fetch_html(test_url));
         assert!(result.is_ok());
         let body = result.unwrap();
         assert!(!body.is_empty());
 
         // Second call should load from cache
-        let result = runtime.block_on(fetch_html(test_url, &cli));
+        let result = runtime.block_on(fetch_html(test_url));
         assert!(result.is_ok());
         let cached_body = result.unwrap();
         assert_eq!(body, cached_body);
