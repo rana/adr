@@ -125,8 +125,9 @@ impl Prsr {
         self.edit_split_city_state_zip(lnes);
         // eprintln!("(4) {lnes:?}");
         edit_drain_after_last_zip(lnes);
-        eprintln!("(5) {lnes:?}");
+        // eprintln!("(5) {lnes:?}");
         edit_single_comma(lnes);
+        edit_zip_20003(lnes);
     }
 
     pub fn remove_initials(&self, full_name: &str) -> String {
@@ -497,6 +498,16 @@ pub fn edit_single_comma(lnes: &mut Vec<String>) {
     for idx in (0..lnes.len()).rev() {
         if lnes[idx] == "," {
             lnes.remove(idx);
+        }
+    }
+}
+
+pub fn edit_zip_20003(lnes: &mut [String]) {
+    // Change DC zip code.
+    // 143 CHOB,,WASHINGTON,DC,20003
+    for idx in (0..lnes.len()).rev() {
+        if lnes[idx] == "20003" {
+            lnes[idx] = "20515".into();
         }
     }
 }

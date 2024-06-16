@@ -94,6 +94,30 @@ impl House {
                 if per.name_fst.is_empty() || per.name_fst.ends_with("Vacancy") {
                     continue;
                 }
+                // Edit some names.
+                match (per.name_fst.as_str(), per.name_lst.as_str()) {
+                    ("J.", "Correa") => {
+                        per.name_fst = "Lou".into();
+                    }
+                    ("A.", "Ferguson") => {
+                        per.name_fst = "Drew".into();
+                    }
+                    ("H.", "Griffith") => {
+                        per.name_fst = "Morgan".into();
+                    }
+                    ("J.", "Hill") => {
+                        per.name_fst = "French".into();
+                    }
+                    ("C.", "Ruppersberger") => {
+                        per.name_fst = "Dutch".into();
+                    }
+                    ("W.", "Steube") => {
+                        per.name_fst = "Greg".into();
+                    }
+                    ("", "") => {}
+                    _ => {}
+                }
+
                 per.url = element
                     .select(&url_selector)
                     .next()
@@ -145,7 +169,7 @@ impl House {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-            //.take(1)
+        //.take(1)
         {
             let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
             eprintln!(
@@ -153,28 +177,74 @@ impl House {
                 pct, idx, per.name_fst, per.name_lst, per.url
             );
 
-            // Fetch addresses into person.
-            let url_pathss = [
-                vec!["contact/offices"],
-                vec!["contact/office-locations"],
-                vec!["district"],
-                vec!["contact"],
-                vec!["offices"],
-                vec!["office-locations"],
-                vec!["office-information"],
-                vec![""],
-                vec!["washington-d-c-office", "district-office"],
-            ];
-            for url_paths in url_pathss {
-                match self.fetch_prs_adrs(per, &url_paths).await? {
+            match &per.url_known {
+                // Fetch known url.
+                Some(url) => match self.fetch_prs_std_adrs(per, url).await? {
                     None => {}
-                    Some((adrs, url)) => {
+                    Some(adrs) => {
                         self.persons[idx].adrs = Some(adrs);
-                        self.persons[idx].url_known = Some(url);
-                        break;
+                    }
+                },
+                None => {
+                    match (
+                        self.persons[idx].name_fst.as_str(),
+                        self.persons[idx].name_lst.as_str(),
+                    ) {
+                        // Fetch and gather from multiple urls.
+                        ("Brian", "Fitzpatrick") => {
+                            let mut adrs = Vec::new();
+                            for url_path in ["washington-d-c-office", "district-office"] {
+                                // Create url.
+                                let mut url = per.url.clone();
+                                if !url_path.is_empty() {
+                                    url.push('/');
+                                    url.push_str(url_path);
+                                }
+                                // Fetch, parse, standardize.
+                                match self.fetch_prs_std_adrs(per, &url).await? {
+                                    None => {}
+                                    Some(new_adrs) => {
+                                        adrs.extend(new_adrs);
+                                    }
+                                }
+                            }
+                            self.persons[idx].adrs = Some(adrs);
+                        }
+                        _ => {
+                            // Fetch from single unknown url.
+                            let url_paths = [
+                                "contact/offices",
+                                "contact/office-locations",
+                                "district",
+                                "contact",
+                                "offices",
+                                "office-locations",
+                                "office-information",
+                                "",
+                            ];
+                            for url_path in url_paths {
+                                // Create url.
+                                let mut url = per.url.clone();
+                                if !url_path.is_empty() {
+                                    url.push('/');
+                                    url.push_str(url_path);
+                                }
+                                // Fetch, parse, standardize.
+                                match self.fetch_prs_std_adrs(per, &url).await? {
+                                    None => {}
+                                    Some(adrs) => {
+                                        self.persons[idx].adrs = Some(adrs);
+                                        self.persons[idx].url_known = Some(url);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
+
+            // Check for address parsing error.
             if self.persons[idx].adrs.is_none() {
                 return Err(anyhow!("no addresses for {}", self.persons[idx]));
             }
@@ -188,41 +258,17 @@ impl House {
         Ok(())
     }
 
-    pub async fn fetch_prs_adrs(
+    /// Fetch and parse addresses and standardize with the USPS.
+    pub async fn fetch_prs_std_adrs(
         &self,
         per: &Person,
-        url_paths: &[&str],
-    ) -> Result<Option<(Vec<Address>, String)>> {
-        // Fetch one or more pages of adress lines.
-        let mut adr_lnes_o: Option<Vec<String>> = None;
-        let mut url = String::default();
-        for url_path in url_paths {
-            // Define url.
-            url.clone_from(&per.url);
-            if !url_path.is_empty() {
-                url.push('/');
-                url.push_str(url_path);
-            }
+        url: &str,
+    ) -> Result<Option<Vec<Address>>> {
+        // Fetch html.
+        let html = fetch_html(url).await?;
 
-            // Fetch html.
-            let html = fetch_html(&url).await?;
-
-            // Parse html to address lines.
-            // Possible Accumulate multiple calls.
-            match prs_adr_lnes(per, &html) {
-                None => {}
-                Some(new_lnes) => {
-                    if adr_lnes_o.is_none() {
-                        adr_lnes_o = Some(new_lnes);
-                    } else {
-                        let mut adr_lnes = adr_lnes_o.unwrap();
-                        adr_lnes.extend(new_lnes);
-                        adr_lnes_o = Some(adr_lnes);
-                    }
-                    // Do not break. Possible multiple calls.
-                }
-            }
-        }
+        // Parse html to address lines.
+        let adr_lnes_o = prs_adr_lnes(per, &html);
 
         // Parse lines to addresses.
         let adrs_o = match adr_lnes_o {
@@ -234,7 +280,7 @@ impl House {
                     if adrs.len() < 2 {
                         None
                     } else {
-                        Some((adrs, url))
+                        Some(adrs)
                     }
                 }
             },
@@ -289,7 +335,7 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
     // Edit lines to make it easier to parse.
     edit_dot(&mut lnes);
     edit_nbsp(&mut lnes);
-    // edit_mailing(&mut lnes);
+    edit_mailing(&mut lnes);
     edit_person_house_lnes(per, &mut lnes);
     PRSR.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
@@ -352,8 +398,8 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
         }
         ("Michael", "Cloud") => {
             for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "TOWER II" {
-                    lnes.remove(idx);
+                if lnes[idx] == "TOWER II, SUITE 980" {
+                    lnes[idx] = "SUITE 980".into();
                 }
             }
         }
@@ -452,15 +498,6 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                     let mut lne = lnes.remove(idx + 1);
                     lne.insert_str(0, "PO BOX ");
                     lnes[idx] = lne;
-                }
-                
-            }
-        }
-        ("Jamaal", "Bowman") => {
-            // "WASHINGTON, DC 20003"
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "WASHINGTON, DC 20003" {
-                    lnes[idx] = "WASHINGTON, DC 20515".into();
                 }
             }
         }

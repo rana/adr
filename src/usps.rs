@@ -42,6 +42,10 @@ pub async fn standardize_addresses(mut adrs: Vec<Address>) -> Result<Vec<Address
         }
     }
 
+    // Deduplicate extracted addresses.
+    adrs.sort_unstable();
+    adrs.dedup_by(|a, b| a == b);
+
     eprintln!("{}", AddressList(adrs.clone()));
 
     Ok(adrs)
