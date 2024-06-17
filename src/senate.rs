@@ -143,30 +143,37 @@ impl Senate {
                     self.persons[idx].adrs = Some(adrs);
                 }
                 None => {
-                    // Fetch addresses into person.
-                    let url_pathss = [
-                        vec!["contact"],
-                        vec!["contact/locations"],
-                        vec!["contact/offices"],
-                        vec!["contact/office-locations"],
-                        vec!["office-locations"],
-                        vec!["offices"],
-                        vec!["office-locations"],
-                        vec!["office-information"],
-                        vec![""],
-                        vec!["public"],
-                        vec!["public/index.cfm/office-locations"],
+                    // Fetch from single unknown url.
+                    let url_paths = [
+                        "contact",
+                        "contact/offices",
+                        "",
+                        "public",
+                        "public/index.cfm/office-locations",
                     ];
-                    for url_paths in url_pathss {
-                        match self.fetch_prs_adrs(per, &url_paths).await? {
+                    for url_path in url_paths {
+                        // Create url.
+                        let mut url = per.url.clone();
+                        if !url_path.is_empty() {
+                            url.push('/');
+                            url.push_str(url_path);
+                        }
+                        // Fetch, parse, standardize.
+                        match self.fetch_prs_std_adrs(per, &url).await? {
                             None => {}
                             Some(adrs) => {
                                 self.persons[idx].adrs = Some(adrs);
+                                self.persons[idx].url_known = Some(url);
                                 break;
                             }
                         }
                     }
                 }
+            }
+
+            // Check for address parsing error.
+            if self.persons[idx].adrs.is_none() {
+                return Err(anyhow!("no addresses for {}", self.persons[idx]));
             }
 
             // Checkpoint save.
@@ -177,45 +184,38 @@ impl Senate {
         Ok(())
     }
 
-    pub async fn fetch_prs_adrs(
+    /// Fetch and parse addresses and standardize with the USPS.
+    pub async fn fetch_prs_std_adrs(
         &self,
         per: &Person,
-        url_paths: &[&str],
+        url: &str,
     ) -> Result<Option<Vec<Address>>> {
-        // Fetch one or more pages of adress lines.
-        let mut adr_lnes_o: Option<Vec<String>> = None;
-        for url_path in url_paths {
-            match fetch_adr_lnes(per, url_path).await? {
-                None => {}
-                Some(new_lnes) => {
-                    if adr_lnes_o.is_none() {
-                        adr_lnes_o = Some(new_lnes);
-                    } else {
-                        let mut adr_lnes = adr_lnes_o.unwrap();
-                        adr_lnes.extend(new_lnes);
-                        adr_lnes_o = Some(adr_lnes);
-                    }
-                }
-            }
-        }
+        // Fetch html.
+        let html = fetch_html(url).await?;
 
-        // Parse lines to Addresses.
+        // Parse html to address lines.
+        let adr_lnes_o = prs_adr_lnes(per, &html);
+
+        // Parse lines to addresses.
         let adrs_o = match adr_lnes_o {
             None => None,
             Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
                 None => None,
-                Some(mut adrs) => Some(standardize_addresses(adrs).await?),
+                Some(mut adrs) => {
+                    adrs = standardize_addresses(adrs).await?;
+                    if adrs.len() < 2 {
+                        None
+                    } else {
+                        Some(adrs)
+                    }
+                }
             },
         };
 
         Ok(adrs_o)
     }
 
-    pub async fn fetch_prs_per(
-        &self,
-        idx: usize,
-        per: &Person,
-    ) -> Result<Option<Vec<Address>>> {
+    pub async fn fetch_prs_per(&self, idx: usize, per: &Person) -> Result<Option<Vec<Address>>> {
         match (per.name_fst.as_str(), per.name_lst.as_str()) {
             ("John", "Hickenlooper") => {
                 let url = "https://hickenlooper.senate.gov/wp-json/wp/v2/locations";
@@ -251,23 +251,11 @@ impl Senate {
     }
 }
 
-pub async fn fetch_adr_lnes(per: &Person, url_path: &str) -> Result<Option<Vec<String>>> {
-    // Some representative addresses are in a contact webpage.
-
-    // Fetch a URL.
-    let mut url = per.url.clone();
-    if !url_path.is_empty() {
-        url.push('/');
-        url.push_str(url_path);
-    }
-    let html = fetch_html(url.as_str()).await?;
-
-    // Parse HTML.
-    let document = Html::parse_document(&html);
-
-    // Attempt to select addresses from various sections of the HTML.
+pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
+    let document = Html::parse_document(html);
     let mut lnes: Vec<String> = Vec::new();
     for txt in [
+        "li",
         "div.et_pb_blurb_description",
         "div.OfficeLocations__addressText",
         "div.map-office-box",
@@ -286,11 +274,34 @@ pub async fn fetch_adr_lnes(per: &Person, url_path: &str) -> Result<Option<Vec<S
     ] {
         let selector = Selector::parse(txt).unwrap();
         for elm in document.select(&selector) {
+            let mut cur_lnes: Vec<String>;
+
             // Extract lines from html.
-            let mut cur_lnes = elm
-                .text()
-                .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
-                .collect::<Vec<String>>();
+            if txt == "li" {
+                cur_lnes = vec![
+                    elm.value()
+                        .attr("data-addr")
+                        .unwrap_or_default()
+                        .trim()
+                        .trim_end_matches(',')
+                        .to_uppercase()
+                        .to_string(),
+                    elm.value()
+                        .attr("data-city")
+                        .unwrap_or_default()
+                        .trim()
+                        .trim_end_matches(',')
+                        .to_uppercase()
+                        .to_string(),
+                ];
+            } else {
+                cur_lnes = elm
+                    .text()
+                    .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
+                    .collect::<Vec<String>>();
+            }
+
+            // eprintln!("--- pre: {cur_lnes:?}");
 
             // Filter lines.
             // Filter separately to allow debugging.
@@ -314,24 +325,21 @@ pub async fn fetch_adr_lnes(per: &Person, url_path: &str) -> Result<Option<Vec<S
     // Edit lines to make it easier to parse.
     edit_dot(&mut lnes);
     edit_nbsp(&mut lnes);
+    edit_mailing(&mut lnes);
     edit_person_senate_lnes(per, &mut lnes);
     PRSR.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
     edit_sob(&mut lnes);
     edit_split_comma(&mut lnes);
-    edit_mailing(&mut lnes);
     edit_starting_hash(&mut lnes);
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);
 
     eprintln!("--- post: {lnes:?}");
 
-    // At least one office in home state, and one in DC.
-    if PRSR.two_zip_or_more(&lnes) {
-        return Ok(Some(lnes));
-    }
+    // Do not check for zip count here.
 
-    Ok(None)
+    Some(lnes)
 }
 
 pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
