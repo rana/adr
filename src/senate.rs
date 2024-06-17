@@ -278,6 +278,7 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
 
             // Extract lines from html.
             if txt == "li" {
+                // For Marco Rubio
                 cur_lnes = vec![
                     elm.value()
                         .attr("data-addr")
@@ -324,7 +325,7 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
 
     // Edit lines to make it easier to parse.
     edit_dot(&mut lnes);
-    edit_nbsp(&mut lnes);
+    edit_nbsp_zwsp(&mut lnes);
     edit_mailing(&mut lnes);
     edit_person_senate_lnes(per, &mut lnes);
     PRSR.edit_lnes(&mut lnes);

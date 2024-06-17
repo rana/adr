@@ -1,6 +1,7 @@
 use crate::models::*;
 use anyhow::{anyhow, Result};
 use csv::Writer;
+use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,17 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 lazy_static! {
-    pub static ref CLI: Client = Client::new();
+    pub static ref CLI: Client = {
+        // Create a header map and set the User-Agent header.
+        // Set User-Agent to avoid url blocking.
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"));
+
+        // Build the client with the custom headers
+        Client::builder()
+            .default_headers(headers)
+            .build().unwrap()
+    };
 }
 
 /// Serializes a JSON struct to a file.

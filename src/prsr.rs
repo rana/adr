@@ -106,7 +106,7 @@ impl Prsr {
             && !self.re_flt.is_match(s)
             && !s.contains("PHONE")
             // && !s.contains("FAX") // Invalid case: FAIRFAX
-            && !s.contains("OFFICE OF")
+            // && !s.contains("OFFICE OF") // Invalid case: "OFFICE OF GOVERNOR PO BOX 001"
             && !s.starts_with("P: ")
             && !s.starts_with("F: ")
             && !s.starts_with("MAIN:")
@@ -195,11 +195,6 @@ impl Prsr {
                 }
                 adrs.push(adr);
             }
-        }
-
-        // Most have one office in state and DC.
-        if adrs.len() < 2 {
-            return None;
         }
 
         // Deduplicate extracted addresses.
@@ -317,9 +312,7 @@ pub fn edit_sob(lnes: &mut Vec<String>) {
         const HART: &str = "HART";
         const DIRKSEN: &str = "DIRKSEN";
         const RUSSELL: &str = "RUSSELL";
-        if !(lnes[idx].contains(HART)
-            || lnes[idx].contains(DIRKSEN)
-            || lnes[idx].contains(RUSSELL))
+        if !(lnes[idx].contains(HART) || lnes[idx].contains(DIRKSEN) || lnes[idx].contains(RUSSELL))
         {
             continue;
         }
@@ -582,14 +575,18 @@ pub fn edit_empty(lnes: &mut Vec<String>) {
     }
 }
 
-pub fn edit_nbsp(lnes: &mut [String]) {
-    // non-breaking space
+pub fn edit_nbsp_zwsp(lnes: &mut [String]) {
+    const NBSP: char = '\u{a0}'; // non-breaking space
+    const ZWSP: char = '\u{200b}'; // zero-width space
     for idx in (0..lnes.len()).rev() {
-        if lnes[idx].contains('\u{a0}') {
+        if lnes[idx].contains(NBSP) {
             lnes[idx] = lnes[idx]
                 .chars()
-                .map(|c| if c == '\u{a0}' { ' ' } else { c })
+                .map(|c| if c == NBSP { ' ' } else { c })
                 .collect();
+        }
+        if lnes[idx].contains(ZWSP) {
+            lnes[idx] = lnes[idx].chars().filter(|&c| c != ZWSP).collect();
         }
     }
 }

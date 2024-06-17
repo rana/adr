@@ -31,9 +31,9 @@ pub async fn main() -> Result<()> {
 
     // let mut house = House::load().await?;
 
-    let mut senate = Senate::load().await?;
+    // let mut senate = Senate::load().await?;
     
-    // let mut state = State::load().await?;
+    let mut state = State::load().await?;
 
     // TODO: SCIENTIFC LEADERS
 

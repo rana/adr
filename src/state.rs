@@ -109,19 +109,53 @@ impl State {
     }
 
     pub async fn fetch_adrs(&mut self) -> Result<()> {
-        for (idx, state) in state_names().iter().enumerate().take(1) {
-            let url = format!("https://www.nga.org/governors/{state}/");
-            let html = fetch_html(&url).await?;
+        // Clone self for file writing.
+        let mut self_clone = self.clone();
+        let per_len = self.persons.len() as f64;
+        let state_names = state_names();
 
-            match prs_adr_lnes(&html) {
-                None => return Err(anyhow!("no lines for {url}")),
-                Some(adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
-                    None => return Err(anyhow!("no address for {url}")),
+        for (idx, per) in self_clone
+            .persons
+            .iter()
+            .enumerate()
+            .filter(|(_, per)| per.adrs.is_none())
+            .take(1)
+        {
+            let mut state = state_names[idx];
+            if state == "virgin-islands" {
+                state = "u-s-virgin-islands";
+            }
+            let mut url = format!("https://www.usa.gov/states/{}", state);
+
+            let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
+            eprintln!("  {}% {} {} {}", pct, idx, state, url);
+
+            if state == "new-york" {
+                let adr = Address {
+                    address1: "NYS STATE CAPITOL BUILDING".into(),
+                    city: "ALBANY".into(),
+                    state: "NY".into(),
+                    zip: "12224".into(),
+                    ..Default::default()
+                };
+                self.persons[idx].adrs = Some(vec![adr]);
+            } else if state == "american-samoa" {
+                let adr = Address {
+                    address1: "EXECUTIVE OFFICE BUILDING FL 3".into(),
+                    city: "PAGO PAGO".into(),
+                    state: "AS".into(),
+                    zip: "96799".into(),
+                    ..Default::default()
+                };
+                self.persons[idx].adrs = Some(vec![adr]);
+            } else {
+                // Fetch, parse, standardize.
+                match self.fetch_prs_std_adrs(state, &url).await? {
+                    None => {}
                     Some(mut adrs) => {
-                        adrs = standardize_addresses(adrs).await?;
                         self.persons[idx].adrs = Some(adrs);
                     }
-                },
+                }
             }
 
             // Checkpoint save.
@@ -131,14 +165,39 @@ impl State {
 
         Ok(())
     }
+
+    /// Fetch and parse addresses and standardize with the USPS.
+    pub async fn fetch_prs_std_adrs(&self, state: &str, url: &str) -> Result<Option<Vec<Address>>> {
+        // Fetch html.
+        let html = fetch_html(url).await?;
+
+        // Parse html to address lines.
+        let adr_lnes_o = prs_adr_lnes(state, &html);
+
+        // Parse lines to addresses.
+        let adrs_o = match adr_lnes_o {
+            None => None,
+            Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
+                None => None,
+                Some(mut adrs) => {
+                    adrs = standardize_addresses(adrs).await?;
+                    if adrs.is_empty() {
+                        None
+                    } else {
+                        Some(adrs)
+                    }
+                }
+            },
+        };
+
+        Ok(adrs_o)
+    }
 }
 
-pub fn prs_adr_lnes(html: &str) -> Option<Vec<String>> {
+pub fn prs_adr_lnes(state: &str, html: &str) -> Option<Vec<String>> {
     let document = Html::parse_document(html);
-
-    // Attempt to select addresses from various sections of the HTML.
     let mut lnes: Vec<String> = Vec::new();
-    for txt in ["li.item", "body"] {
+    for txt in ["span.field", "li.item", "body"] {
         let selector = Selector::parse(txt).unwrap();
         for elm in document.select(&selector) {
             // Extract lines from html.
@@ -147,8 +206,9 @@ pub fn prs_adr_lnes(html: &str) -> Option<Vec<String>> {
                 .map(|s| s.trim().trim_end_matches(',').to_uppercase().to_string())
                 .collect::<Vec<String>>();
 
+            // eprintln!("--- pre: {cur_lnes:?}");
+
             // Filter lines.
-            // Filter separately to allow debugging.
             cur_lnes = cur_lnes
                 .into_iter()
                 .filter(|s| PRSR.filter(s))
@@ -168,25 +228,70 @@ pub fn prs_adr_lnes(html: &str) -> Option<Vec<String>> {
 
     // Edit lines to make it easier to parse.
     edit_dot(&mut lnes);
-    edit_nbsp(&mut lnes);
-    // edit_person_senate_lnes(per, &mut lnes);
+    edit_nbsp_zwsp(&mut lnes);
+    edit_mailing(&mut lnes);
+    edit_person_state_lnes(state, &mut lnes);
     PRSR.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
-    // edit_sob(&mut lnes);
     edit_split_comma(&mut lnes);
-    edit_mailing(&mut lnes);
     edit_starting_hash(&mut lnes);
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);
 
     eprintln!("--- post: {lnes:?}");
 
-    // At least one office in home state, and one in DC.
-    if PRSR.two_zip_or_more(&lnes) {
-        return Some(lnes);
-    }
+    // Do not check for zip count here.
 
-    None
+    Some(lnes)
+}
+
+pub fn edit_person_state_lnes(state: &str, lnes: &mut [String]) {
+    match state {
+        "indiana" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "STATEHOUSE" {
+                    lnes[idx] = "200 W WASHINGTON ST STE 206".into();
+                }
+            }
+        }
+        "new-jersey" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx].contains("PO BOX") {
+                    lnes[idx] = lnes[idx].replace("PO BOX", ",PO BOX");
+                }
+            }
+        }
+        "georgia" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "SUITE 203, STATE CAPITOL" {
+                    lnes[idx] = "STE 203".into();
+                }
+            }
+        }
+        "massachusetts" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "OFFICE OF THE GOVERNOR, ROOM 280" {
+                    lnes[idx] = "ROOM 280".into();
+                }
+            }
+        }
+        "northern-mariana-islands" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx].contains("CALLER BOX") {
+                    lnes[idx] = lnes[idx].replace("CALLER BOX", "PO BOX");
+                }
+            }
+        }
+        "u-s-virgin-islands" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx].contains("(21-22)") {
+                    lnes[idx] = lnes[idx].replace("(21-22)", "");
+                }
+            }
+        }
+        "" => {}
+        _ => {}
+    }
 }
 
 fn state_names() -> Vec<&'static str> {
