@@ -13,6 +13,7 @@ mod models;
 mod prsr;
 mod senate;
 mod usps;
+mod executive;
 use core::*;
 use state::*;
 use house::*;
@@ -22,20 +23,21 @@ use models::*;
 use prsr::*;
 use senate::*;
 use usps::*;
+use executive::*;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // let mut military = Military::load().await?;
 
-    let mut house = House::load().await?;
+    // let mut house = House::load().await?;
 
-    // let mut senate = Senate::load().await?;
+    let mut senate = Senate::load().await?;
     
     // let mut state = State::load().await?;
 
     // TODO: SCIENTIFC LEADERS
 
-    // TODO: EXECUTIVE BRANCH
+    // let mut executive = Executive::load().await?;
 
     Ok(())
 }
