@@ -593,6 +593,7 @@ pub async fn fetch_adrs() -> Result<HashMap<Center, Address>> {
                 match fetch_prs_std_adr(ctr, &url).await? {
                     None => {}
                     Some(mut adr) => {
+                        // Easy way to clean address2. Due to "CENTER".
                         adr.address2 = None;
                         map_adrs.insert(ctr, adr);
                     }
@@ -672,7 +673,7 @@ pub fn prs_adr_lnes(ctr: Center, html: &str) -> Option<Vec<String>> {
     edit_dot(&mut lnes);
     edit_nbsp_zwsp(&mut lnes);
     edit_mailing(&mut lnes);
-    edit_center_lnes(ctr, &mut lnes);
+    edit_nasa_lnes(ctr, &mut lnes);
     PRSR.edit_lnes(&mut lnes);
     edit_newline(&mut lnes);
     edit_split_comma(&mut lnes);
@@ -687,7 +688,7 @@ pub fn prs_adr_lnes(ctr: Center, html: &str) -> Option<Vec<String>> {
     Some(lnes)
 }
 
-pub fn edit_center_lnes(ctr: Center, lnes: &mut Vec<String>) {
+pub fn edit_nasa_lnes(ctr: Center, lnes: &mut Vec<String>) {
     match ctr {
         HQ => {
             for idx in (0..lnes.len()).rev() {

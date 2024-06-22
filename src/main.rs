@@ -36,7 +36,7 @@ pub async fn main() -> Result<()> {
     let mut house = House::load().await?;
     let mut state = State::load().await?;
 
-    let mut pers = Vec::with_capacity(5_000);
+    let mut pers = Vec::with_capacity(2_000);
     pers.extend(military.persons);
     pers.extend(nasa.persons);
     pers.extend(executive.persons);
@@ -45,7 +45,7 @@ pub async fn main() -> Result<()> {
     pers.extend(state.persons);
     eprintln!("{} people", pers.len());
 
-    let mut adrs = Vec::with_capacity(10_000);
+    let mut adrs = Vec::with_capacity(4_000);
     for per in pers.iter() {
         if per.adrs.is_none() {
             return Err(anyhow!("{} has no addresses", per.name));

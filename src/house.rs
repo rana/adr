@@ -67,15 +67,15 @@ impl House {
         let mut pers = Vec::with_capacity(CAP_PER);
 
         // Define the CSS selector for the members list
-        let selector = Selector::parse("table.table tr").unwrap();
-        let name_selector = Selector::parse("td:nth-of-type(1)").unwrap();
-        let url_selector = Selector::parse("td:nth-of-type(1) a").unwrap();
+        let tbl_sel = Selector::parse("table.table tr").unwrap();
+        let name_sel = Selector::parse("td:nth-of-type(1)").unwrap();
+        let url_sel = Selector::parse("td:nth-of-type(1) a").unwrap();
 
         // Iterate over each member entry
-        for element in document.select(&selector) {
-            if let Some(name_element) = element.select(&name_selector).next() {
+        for tbl_elm in document.select(&tbl_sel) {
+            if let Some(name_elm) = tbl_elm.select(&name_sel).next() {
                 let mut per = Person::default();
-                if let Some((name_lst, name_fst)) = name_element
+                if let Some((name_lst, name_fst)) = name_elm
                     .text()
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -114,8 +114,8 @@ impl House {
                     _ => {}
                 }
 
-                per.url = element
-                    .select(&url_selector)
+                per.url = tbl_elm
+                    .select(&url_sel)
                     .next()
                     .map_or(String::new(), |a| {
                         a.value()
