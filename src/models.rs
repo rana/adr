@@ -23,43 +23,18 @@ impl fmt::Display for Role {
 /// A person.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Person {
-    pub name_fst: String,
-    pub name_lst: String,
+    pub name: String,
     pub title1: String,
     pub title2: String,
     pub url: String,
-    pub url_known: Option<String>,
     pub adrs: Option<Vec<Address>>,
-}
-impl Person {
-    pub fn clone_url_known(&self) -> Self {
-        Self {
-            name_fst: self.name_fst.clone(),
-            name_lst: self.name_lst.clone(),
-            url_known: self.url_known.clone(),
-            ..Default::default()
-        }
-    }
-    pub fn merge_url_known(&mut self, src: &Person) {
-        self.url_known.clone_from(&src.url_known);
-    }
-}
-pub fn clone_url_known(pers: &[Person]) -> Vec<Person> {
-    pers.iter().map(|v| v.clone_url_known()).collect()
-}
-pub fn merge_url_known(srcs: &[Person], dsts: &mut [Person]) {
-    for (dst, src) in dsts.iter_mut().zip(srcs.iter()) {
-        dst.merge_url_known(src)
-    }
 }
 impl fmt::Display for Person {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{},{},{},{},{}",
-            // .as_deref().unwrap_or("")
-            self.name_fst,
-            self.name_lst,
+            "{},{},{},{}",
+            self.name,
             self.title1,
             self.title2,
             self.url
@@ -68,7 +43,7 @@ impl fmt::Display for Person {
 }
 impl PartialEq for Person {
     fn eq(&self, other: &Self) -> bool {
-        self.name_lst == other.name_lst && self.name_fst == other.name_fst
+        self.name == other.name
     }
 }
 impl Eq for Person {}
@@ -79,10 +54,7 @@ impl PartialOrd for Person {
 }
 impl Ord for Person {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.name_lst.cmp(&other.name_lst) {
-            Ordering::Equal => self.name_fst.cmp(&other.name_fst),
-            other => other,
-        }
+        self.name.cmp(&other.name)
     }
 }
 

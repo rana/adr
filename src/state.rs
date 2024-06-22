@@ -69,22 +69,9 @@ impl State {
         let name_sel = Selector::parse("h1.title").expect("Invalid selector");
         if let Some(elm) = document.select(&name_sel).next() {
             let full_name = elm.text().collect::<Vec<_>>().concat();
-            // Select first name and last name.
-            // Full name may have middle name or suffix.
-            let names = full_name
-                .split_whitespace()
-                .filter(|&w| w != "Gov." && w != "Jr." && w != "III")
-                .map(|w| w.trim_end_matches(','))
-                .collect::<Vec<_>>();
-            per.name_fst = names[0].trim().to_string();
-            per.name_lst = names[names.len() - 1].trim().to_string();
-
-            // Validate fields.
-            if per.name_fst.is_empty() {
-                return Err(anyhow!("first name empty{:?}", per));
-            }
-            if per.name_lst.is_empty() {
-                return Err(anyhow!("last name empty {:?}", per));
+            per.name = name_clean(&full_name);
+            if per.name.is_empty() {
+                return Err(anyhow!("name is empty{:?}", per));
             }
         }
 
@@ -119,7 +106,7 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-            .take(1)
+            //.take(1)
         {
             let mut state = state_names[idx];
             if state == "virgin-islands" {
@@ -150,7 +137,7 @@ impl State {
                 self.persons[idx].adrs = Some(vec![adr]);
             } else {
                 // Fetch, parse, standardize.
-                match self.fetch_prs_std_adrs(state, &url).await? {
+                match fetch_prs_std_adrs(state, &url).await? {
                     None => {}
                     Some(mut adrs) => {
                         self.persons[idx].adrs = Some(adrs);
@@ -165,33 +152,33 @@ impl State {
 
         Ok(())
     }
+}
 
-    /// Fetch and parse addresses and standardize with the USPS.
-    pub async fn fetch_prs_std_adrs(&self, state: &str, url: &str) -> Result<Option<Vec<Address>>> {
-        // Fetch html.
-        let html = fetch_html(url).await?;
+/// Fetch and parse addresses and standardize with the USPS.
+pub async fn fetch_prs_std_adrs(state: &str, url: &str) -> Result<Option<Vec<Address>>> {
+    // Fetch html.
+    let html = fetch_html(url).await?;
 
-        // Parse html to address lines.
-        let adr_lnes_o = prs_adr_lnes(state, &html);
+    // Parse html to address lines.
+    let adr_lnes_o = prs_adr_lnes(state, &html);
 
-        // Parse lines to addresses.
-        let adrs_o = match adr_lnes_o {
+    // Parse lines to addresses.
+    let adrs_o = match adr_lnes_o {
+        None => None,
+        Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
             None => None,
-            Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
-                None => None,
-                Some(mut adrs) => {
-                    adrs = standardize_addresses(adrs).await?;
-                    if adrs.is_empty() {
-                        None
-                    } else {
-                        Some(adrs)
-                    }
+            Some(mut adrs) => {
+                adrs = standardize_addresses(adrs).await?;
+                if adrs.is_empty() {
+                    None
+                } else {
+                    Some(adrs)
                 }
-            },
-        };
+            }
+        },
+    };
 
-        Ok(adrs_o)
-    }
+    Ok(adrs_o)
 }
 
 pub fn prs_adr_lnes(state: &str, html: &str) -> Option<Vec<String>> {
@@ -238,7 +225,7 @@ pub fn prs_adr_lnes(state: &str, html: &str) -> Option<Vec<String>> {
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);
 
-    eprintln!("--- post: {lnes:?}");
+    eprintln!("--- --- --- post: {lnes:?}");
 
     // Do not check for zip count here.
 

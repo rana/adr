@@ -12,7 +12,6 @@ use std::ops::Add;
 use std::path::Path;
 
 const FLE_PTH: &str = "house.json";
-const FLE_PTH_URL: &str = "house.url.json";
 
 /// The total number of members in the U.S. House of Representatives is 441. This includes 435 voting members who represent the 50 states and 6 non-voting members who represent the District of Columbia, Puerto Rico, and four other U.S. territories (American Samoa, Guam, the Northern Mariana Islands, and the U.S. Virgin Islands). Some members may be vacant.
 const CAP_PER: usize = 441;
@@ -36,12 +35,8 @@ impl House {
     pub async fn load() -> Result<House> {
         // Read file from disk.
         let mut house = match read_from_file::<House>(FLE_PTH) {
-            Ok(mut house_from_disk) => {
-                if let Ok(house_url) = read_from_file::<House>(FLE_PTH_URL) {
-                    merge_url_known(&house_url.persons, &mut house_from_disk.persons);
-                }
-                house_from_disk
-            }
+            Ok(mut house_from_disk) => house_from_disk,
+
             Err(err) => {
                 eprintln!("err: read file: {err}");
                 let mut house = House::new();
@@ -86,35 +81,36 @@ impl House {
                     .join(" ")
                     .split_once(',')
                 {
-                    per.name_fst = name_fst.trim().to_string();
-                    per.name_lst = name_lst.trim().to_string();
+                    let full_name = format!("{} {}", name_fst.trim(), name_lst.trim());
+                    // eprintln!("{}", full_name);
+                    per.name = name_clean(&full_name);
                 }
                 // Skip empty or vacancy.
                 // "Mike - Vacancy"
-                if per.name_fst.is_empty() || per.name_fst.ends_with("Vacancy") {
+                if per.name.is_empty() || per.name.contains("Vacancy") {
                     continue;
                 }
                 // Edit some names.
-                match (per.name_fst.as_str(), per.name_lst.as_str()) {
-                    ("J.", "Correa") => {
-                        per.name_fst = "Lou".into();
+                match per.name.as_str() {
+                    "J. Correa" => {
+                        per.name = "Lou Correa".into();
                     }
-                    ("A.", "Ferguson") => {
-                        per.name_fst = "Drew".into();
+                    "A. Ferguson" => {
+                        per.name = "Drew Ferguson".into();
                     }
-                    ("H.", "Griffith") => {
-                        per.name_fst = "Morgan".into();
+                    "H. Griffith" => {
+                        per.name = "Morgan Griffith".into();
                     }
-                    ("J.", "Hill") => {
-                        per.name_fst = "French".into();
+                    "J. Hill" => {
+                        per.name = "French Hill".into();
                     }
-                    ("C.", "Ruppersberger") => {
-                        per.name_fst = "Dutch".into();
+                    "C. Ruppersberger" => {
+                        per.name = "Dutch Ruppersberger".into();
                     }
-                    ("W.", "Steube") => {
-                        per.name_fst = "Greg".into();
+                    "W. Steube" => {
+                        per.name = "Greg Steube".into();
                     }
-                    ("", "") => {}
+                    "" => {}
                     _ => {}
                 }
 
@@ -138,14 +134,11 @@ impl House {
                 }
 
                 // Validate fields.
-                if per.name_fst.is_empty() {
-                    return Err(anyhow!("first name empty {:?}", per));
-                }
-                if per.name_lst.is_empty() {
-                    return Err(anyhow!("last name empty {:?}", per));
+                if per.name.is_empty() {
+                    return Err(anyhow!("name is empty {:?}", per));
                 }
                 if per.url.is_empty() {
-                    return Err(anyhow!("url empty {:?}", per));
+                    return Err(anyhow!("url is empty {:?}", per));
                 }
                 if !per.url.ends_with(".house.gov") {
                     return Err(anyhow!("url doesn't end with '.house.gov' {:?}", per));
@@ -169,76 +162,55 @@ impl House {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-        //.take(1)
+        // .take(1)
         {
             let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
-            eprintln!(
-                "  {}% {} {} {} {}",
-                pct, idx, per.name_fst, per.name_lst, per.url
-            );
+            eprintln!("  {}% {} {} {}", pct, idx, per.name, per.url);
 
-            match &per.url_known {
-                // Fetch known url.
-                Some(url) => match self.fetch_prs_std_adrs(per, url).await? {
-                    None => {}
-                    Some(adrs) => {
-                        self.persons[idx].adrs = Some(adrs);
+            match self.persons[idx].name.as_str() {
+                // Fetch and gather from multiple urls.
+                "Brian Fitzpatrick" => {
+                    let mut adrs = Vec::new();
+                    for url_path in ["washington-d-c-office", "district-office"] {
+                        // Create url.
+                        let mut url = per.url.clone();
+                        if !url_path.is_empty() {
+                            url.push('/');
+                            url.push_str(url_path);
+                        }
+                        // Fetch, parse, standardize.
+                        if let Some(new_adrs) = fetch_prs_std_adrs(per, &url).await? {
+                            adrs.extend(new_adrs);
+                        }
                     }
-                },
-                None => {
-                    match (
-                        self.persons[idx].name_fst.as_str(),
-                        self.persons[idx].name_lst.as_str(),
-                    ) {
-                        // Fetch and gather from multiple urls.
-                        ("Brian", "Fitzpatrick") => {
-                            let mut adrs = Vec::new();
-                            for url_path in ["washington-d-c-office", "district-office"] {
-                                // Create url.
-                                let mut url = per.url.clone();
-                                if !url_path.is_empty() {
-                                    url.push('/');
-                                    url.push_str(url_path);
-                                }
-                                // Fetch, parse, standardize.
-                                match self.fetch_prs_std_adrs(per, &url).await? {
-                                    None => {}
-                                    Some(new_adrs) => {
-                                        adrs.extend(new_adrs);
-                                    }
-                                }
+                    self.persons[idx].adrs = Some(adrs);
+                }
+                _ => {
+                    // Fetch from single unknown url.
+                    let url_paths = [
+                        "contact/offices",
+                        "contact/office-locations",
+                        "district",
+                        "contact",
+                        "offices",
+                        "office-locations",
+                        "office-information",
+                        "",
+                    ];
+                    for url_path in url_paths {
+                        // Create url.
+                        let mut url = per.url.clone();
+                        if !url_path.is_empty() {
+                            url.push('/');
+                            url.push_str(url_path);
+                        }
+                        // Fetch, parse, standardize.
+                        if let Some(adrs) = fetch_prs_std_adrs(per, &url).await? {
+                            if adrs.len() < 2 {
+                                continue;
                             }
                             self.persons[idx].adrs = Some(adrs);
-                        }
-                        _ => {
-                            // Fetch from single unknown url.
-                            let url_paths = [
-                                "contact/offices",
-                                "contact/office-locations",
-                                "district",
-                                "contact",
-                                "offices",
-                                "office-locations",
-                                "office-information",
-                                "",
-                            ];
-                            for url_path in url_paths {
-                                // Create url.
-                                let mut url = per.url.clone();
-                                if !url_path.is_empty() {
-                                    url.push('/');
-                                    url.push_str(url_path);
-                                }
-                                // Fetch, parse, standardize.
-                                match self.fetch_prs_std_adrs(per, &url).await? {
-                                    None => {}
-                                    Some(adrs) => {
-                                        self.persons[idx].adrs = Some(adrs);
-                                        self.persons[idx].url_known = Some(url);
-                                        break;
-                                    }
-                                }
-                            }
+                            break;
                         }
                     }
                 }
@@ -251,43 +223,38 @@ impl House {
 
             // Checkpoint save.
             write_to_file(&self, FLE_PTH)?;
-            let pers_url = clone_url_known(&self.persons);
-            write_to_file(&pers_url, FLE_PTH_URL)?;
         }
 
         Ok(())
     }
+}
 
-    /// Fetch and parse addresses and standardize with the USPS.
-    pub async fn fetch_prs_std_adrs(
-        &self,
-        per: &Person,
-        url: &str,
-    ) -> Result<Option<Vec<Address>>> {
-        // Fetch html.
-        let html = fetch_html(url).await?;
+/// Fetch and parse addresses and standardize with the USPS.
+pub async fn fetch_prs_std_adrs(per: &Person, url: &str) -> Result<Option<Vec<Address>>> {
+    // Fetch html.
+    let html = fetch_html(url).await?;
 
-        // Parse html to address lines.
-        let adr_lnes_o = prs_adr_lnes(per, &html);
+    // Parse html to address lines.
+    let adr_lnes_o = prs_adr_lnes(per, &html);
 
-        // Parse lines to addresses.
-        let adrs_o = match adr_lnes_o {
+    // Parse lines to addresses.
+    let adrs_o = match adr_lnes_o {
+        None => None,
+        Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
             None => None,
-            Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
-                None => None,
-                Some(mut adrs) => {
-                    adrs = standardize_addresses(adrs).await?;
-                    if adrs.len() < 2 {
-                        None
-                    } else {
-                        Some(adrs)
-                    }
+            Some(mut adrs) => {
+                adrs = standardize_addresses(adrs).await?;
+                // Can be called twice for different url
+                if adrs.is_empty() {
+                    None
+                } else {
+                    Some(adrs)
                 }
-            },
-        };
+            }
+        },
+    };
 
-        Ok(adrs_o)
-    }
+    Ok(adrs_o)
 }
 
 pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
@@ -320,9 +287,11 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
                 .filter(|s| PRSR.filter(s))
                 .collect::<Vec<String>>();
 
-            eprintln!("{cur_lnes:?}");
+            if !cur_lnes.is_empty() {
+                eprintln!("{cur_lnes:?}");
 
-            lnes.extend(cur_lnes);
+                lnes.extend(cur_lnes);
+            }
         }
 
         if !lnes.is_empty() {
@@ -345,7 +314,7 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);
 
-    eprintln!("--- post: {lnes:?}");
+    eprintln!("--- --- --- post: {lnes:?}");
 
     // Do not check for zip count here.
 
@@ -353,64 +322,64 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
 }
 
 pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
-    match (per.name_fst.as_str(), per.name_lst.as_str()) {
-        ("Matthew", "Rosendale") => {
+    match per.name.as_str() {
+        "Matthew Rosendale" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "3300 2ND AVENUE N SUITES 7-8" {
                     lnes[idx] = "3300 2ND AVENUE N SUITE 7".into();
                 }
             }
         }
-        ("Terri", "Sewell") => {
+        "Terri Sewell" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "101 SOUTH LAWRENCE ST COURTHOUSE ANNEX 3" {
                     lnes[idx] = "101 SOUTH LAWRENCE ST".into();
                 }
             }
         }
-        ("Joe", "Wilson") => {
+        "Joe Wilson" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "1700 SUNSET BLVD (US 378), SUITE 1" {
                     lnes[idx] = "1700 SUNSET BLVD STE 1".into();
                 }
             }
         }
-        ("Robert", "Wittman") => {
+        "Robert Wittman" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "508 CHURCH LANE" || lnes[idx] == "307 MAIN STREET" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("Andy", "Biggs") => {
+        "Andy Biggs" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "SUPERSTITION PLAZA" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("John", "Carter") => {
+        "John Carter" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "SUITE # I-10" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("Michael", "Cloud") => {
+        "Michael Cloud" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "TOWER II, SUITE 980" {
                     lnes[idx] = "SUITE 980".into();
                 }
             }
         }
-        ("Tony", "Gonzales") => {
+        "Tony Gonzales" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("(BY APPT ONLY)") {
                     lnes[idx] = lnes[idx].replace(" (BY APPT ONLY)", "");
                 }
             }
         }
-        ("Garret", "Graves") => {
+        "Garret Graves" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("615 E WORTHY STREET GONZALES") {
                     lnes[idx] = "GONZALES".into();
@@ -418,7 +387,7 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Jared", "Huffman") => {
+        "Jared Huffman" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "430 NORTH FRANKLIN ST FORT BRAGG, CA 95437" {
                     lnes[idx] = "FORT BRAGG, CA 95437".into();
@@ -428,14 +397,14 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Bill", "Huizenga") => {
+        "Bill Huizenga" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("108 PORTAGE, MI 49002") {
                     lnes[idx] = lnes[idx].replace("108 PORTAGE, MI 49002", "108\nPORTAGE, MI 49002")
                 }
             }
         }
-        ("Mike", "Johnson") => {
+        "Mike Johnson" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "444 CASPARI DRIVE" || lnes[idx] == "SOUTH HALL ROOM 224" {
                     lnes.remove(idx);
@@ -444,28 +413,28 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Michael", "Lawler") => {
+        "Michael Lawler" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "PO BOX 1645" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("Anna Paulina", "Luna") => {
+        "Anna Paulina Luna" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("OFFICE SUITE:") {
                     lnes[idx] = lnes[idx].replace("OFFICE SUITE:", "STE")
                 }
             }
         }
-        ("Daniel", "Meuser") => {
+        "Daniel Meuser" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "SUITE 110, LOSCH PLAZA" {
                     lnes[idx] = "SUITE 110".into();
                 }
             }
         }
-        ("Max", "Miller") => {
+        "Max Miller" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "WASHINGTON" && idx != 0 {
                     lnes.insert(idx - 1, "143 CHOB".into());
@@ -473,21 +442,21 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Frank", "Pallone") => {
+        "Frank Pallone" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "67/69 CHURCH ST" {
                     lnes[idx] = "67 CHURCH ST".into();
                 }
             }
         }
-        ("Stacey", "Plaskett") => {
+        "Stacey Plaskett" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "FREDERIKSTED, VI 00840" {
                     lnes[idx] = "ST CROIX, VI 00840".into();
                 }
             }
         }
-        ("Raul", "Grijalva") => {
+        "Raul Grijalva" => {
             for idx in (0..lnes.len()).rev() {
                 // "146 N. STATE AVENUE", "SOMERTON AZ 85350"
                 if lnes[idx] == "146 N STATE AVENUE" {
@@ -498,10 +467,21 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
                     let mut lne = lnes.remove(idx + 1);
                     lne.insert_str(0, "PO BOX ");
                     lnes[idx] = lne;
+                } else if lnes[idx].starts_with("EL PUEBLO") {
+                    // "EL PUEBLO COMMUNITY CENTER"
+                    lnes.remove(idx);
                 }
             }
         }
-        ("", "") => {}
+        "Bryan Steil" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx].contains("CIVIC CENTER") {
+                    // "ST FRANCIS CIVIC CENTER"
+                    lnes.remove(idx);
+                }
+            }
+        }
+        "" => {}
         _ => {}
     }
 }

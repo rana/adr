@@ -32,10 +32,7 @@ impl Military {
         // Read members file from disk.
 
         let military = match read_from_file::<Military>(FLE_PTH) {
-            Ok(house_from_disk) => {
-                // Read from disk.
-                house_from_disk
-            }
+            Ok(military_from_disk) => military_from_disk,
             Err(_) => {
                 let mut military = Military::new();
 
@@ -67,8 +64,10 @@ impl Military {
             eprintln!("{cur_lnes:?}");
 
             // Parse person.
-            let mut per = Person::default();
-            per.name_fst.clone_from(&cur_lnes[0]);
+            let mut per = Person {
+                name: name_clean(&cur_lnes[0]),
+                ..Default::default()
+            };
             per.title1.clone_from(&cur_lnes[1].to_uppercase());
             // Clean up title.
             if let Some(idx) = per.title1.find('/') {
@@ -81,11 +80,11 @@ impl Military {
                 per.title1.truncate(idx + 11 - 1);
             }
             // Validate person.
-            if per.name_fst.is_empty() {
-                return Err(anyhow!("person: name_fst empty {:?}", per));
+            if per.name.is_empty() {
+                return Err(anyhow!("name is empty {:?}", per));
             }
             if per.title1.is_empty() {
-                return Err(anyhow!("person: title empty {:?}", per));
+                return Err(anyhow!("title is empty {:?}", per));
             }
 
             // Parse address.

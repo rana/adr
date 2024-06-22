@@ -10,11 +10,6 @@ lazy_static! {
 }
 
 pub struct Prsr {
-    /// A regex matching a floating point number:
-    /// "46.86551919465073", "-96.83144324414937".
-    pub re_flt: Regex,
-    /// A regex matching initials in a name.
-    pub re_name_initials: Regex,
     /// A regex matching abbreviations of US states and US territories according to the USPS.
     pub re_state: Regex,
     /// A regex matching US phone numbers.
@@ -27,13 +22,20 @@ pub struct Prsr {
     pub re_po_box: Regex,
     /// A regex matching clock time.
     pub re_time: Regex,
+    /// A regex matching parentheses.
+    pub re_parens: Regex,
+    /// A regex matching a floating point number:
+    /// "46.86551919465073", "-96.83144324414937".
+    pub re_flt: Regex,
+    /// A regex matching initials in a name.
+    pub re_name_initials: Regex,
+    /// A regex matching name affectations.
+    pub re_name_affectation: Regex,
 }
 
 impl Prsr {
     pub fn new() -> Self {
         Prsr {
-            re_flt: Regex::new(r"^-?\d+\.\d+$").unwrap(),
-            re_name_initials: Regex::new(r"\b[A-Z]\.\s+").unwrap(),
             re_state:Regex::new(r"(?xi)  # Case-insensitive and extended modes
             \b(                            # Word boundary and start of group
             AL|Alabama|AK|Alaska|AS|American\s+Samoa|AZ|Arizona|AR|Arkansas|CA|California|
@@ -71,11 +73,16 @@ impl Prsr {
                     one|two|three|four|five|six|seven|eight|nine|ten|
                     eleven|twelve|thirteen|fourteen|fifteen|sixteen|
                     seventeen|eighteen|nineteen|twenty
+                    #|                # OR
+                    #NASA             # NASA
+                    #['s]*            
                 )
                 \s+              # One or more spaces after the digits
                 .*               # Any characters (including none) in between
                 [A-Za-z]         # At least one letter somewhere in the string
                 .*               # Any characters (including none) after the letter
+                |                # OR
+                CENTER           # For 'SPACE CENTER'
                 $                # End of string
             ").unwrap(),
             re_address1_suffix: Regex::new(r"(?i)\b(?:ROAD|RD|STREET|ST|AVENUE|AVE|DRIVE|DR|CIRCLE|CIR|BOULEVARD|BLVD|PLACE|PL|COURT|CT|LANE|LN|PARKWAY|PKWY|TERRACE|TER|WAY|WAY|ALLEY|ALY|CRESCENT|CRES|HIGHWAY|HWY|SQUARE|SQ)\b").unwrap(),
@@ -87,6 +94,39 @@ impl Prsr {
                 $                # End of string
             ").unwrap(),
             re_time: Regex::new(r"(?i)\b\d{1,2}\s*(?:AM|PM|A\.M\.|P\.M\.)").unwrap(),
+            re_parens: Regex::new(r"\(.*?\)").unwrap(),
+            re_flt: Regex::new(r"^-?\d+\.\d+$").unwrap(),
+            re_name_initials: Regex::new(r"\b[A-Z]\.\s+").unwrap(), // Allow: A.C. Quincy, r"\b[A-Z]\.([A-Z]\.)*\s+"
+            re_name_affectation: Regex::new(r#"(?xi)
+                (
+                    "[^"]*"         # Quoted text
+                    |               # OR
+                    \(.*?\)         # Text in parentheses
+                    |               # OR
+                    Gov\.           # 'Gov.' abbreviation
+                    |               # OR
+                    Jr\.           # 'Jr.' abbreviation
+                    |               # OR
+                    Dr\.            # 'Dr.' abbreviation
+                    |               # OR
+                    Dr\b            # 'Dr' abbreviation
+                    |                   # OR
+                    (?:Ph|Ed)\.?\s*D\.  # 'Ph.D.', 'Ph. D.', 'Ph D.' abbreviation
+                    |                   # OR
+                    (?:Ph|Ed)\s*D\b     # 'PhD', 'Ph D' abbreviation
+                    |                   # OR
+                    J\.?\s*D\.          # 'J.D.', 'J. D.' abbreviation
+                    |                   # OR
+                    JD\b                # 'JD' abbreviation
+                    |                   # OR
+                    MPH\b               # 'MPH' abbreviation
+                    |                   # OR
+                    CIH\b               # 'CIH' abbreviation
+                    |                   # OR
+                    (II|III|IV)\b       # Roman numerals
+                    \b                  # Word boundry
+                )
+            "#).unwrap(), 
         }
     }
 
@@ -128,13 +168,6 @@ impl Prsr {
         // eprintln!("(5) {lnes:?}");
         edit_single_comma(lnes);
         edit_zip_20003(lnes);
-    }
-
-    pub fn remove_initials(&self, full_name: &str) -> String {
-        // Define the regular expression to match initials
-        let re = Regex::new(r"\b[A-Z]\.\s+").unwrap();
-        // Replace the initials with an empty string
-        self.re_name_initials.replace_all(full_name, "").to_string()
     }
 
     pub fn prs_adrs(&self, lnes: &[String]) -> Option<Vec<Address>> {
@@ -796,6 +829,51 @@ pub fn trim_end_spc_pnc(lne: &mut String) {
     lne.truncate(trim_idx);
 }
 
+pub fn nbsp_replace(mut s: String) -> String {
+    const NBSP: char = '\u{a0}'; // non-breaking space
+    if s.contains(NBSP) {
+        s = s.chars().map(|c| if c == NBSP { ' ' } else { c }).collect();
+    }
+    s
+}
+
+pub fn zwsp_remove(mut s: String) -> String {
+    const ZWSP: char = '\u{200b}'; // zero-width space
+    if s.contains(ZWSP) {
+        s = s.chars().filter(|&c| c != ZWSP).collect();
+    }
+
+    s
+}
+
+pub fn dot_remove(mut s: String) -> String {
+    const ZWSP: char = '.'; // dot
+    if s.contains(ZWSP) {
+        s = s.chars().filter(|&c| c != ZWSP).collect();
+    }
+
+    s
+}
+
+pub fn name_clean(full_name: &str) -> String {
+    // Replace name affectations with an empty string
+    let mut s = PRSR.re_name_affectation.replace_all(full_name, "");
+
+    // Replace non-breaking space
+    let mut s = nbsp_replace(s.to_string());
+
+    // Trim
+    s.trim().trim_end_matches(',').trim().replace("  ", " ")
+}
+
+pub fn name_clean_split(full_name: &str) -> (String, String) {
+    // Support two-word last names.
+    // "John Quincy Public"
+    let full_name = name_clean(full_name);
+    let names = full_name.split_once(' ').unwrap_or_default();
+    (names.0.into(), names.1.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,6 +907,10 @@ mod tests {
         let prsr = Prsr::new();
 
         let valid_addresses = vec![
+            "LANGLEY RESEARCH CENTER",
+            "KENNEDY SPACE CENTER",
+            "NASA Ames Research Center",
+            "NASA's Johnson Space Center",
             "403-1/2 NE JEFFERSON STREET",
             "118-B CARLISLE ST",
             "ONE BLUE HILL PLAZA",
@@ -1424,6 +1506,204 @@ mod tests {
     }
 
     #[test]
+    fn test_regex_parens_valid() {
+        let prsr = Prsr::new();
+
+        // Valid cases
+        let cases = vec![
+            ("General Lester L. Lyles (USAF, Ret.)", vec!["(USAF, Ret.)"]),
+            ("George A. Scott (acting)", vec!["(acting)"]),
+            ("(start) middle (end)", vec!["(start)", "(end)"]),
+            ("No text in (parentheses)", vec!["(parentheses)"]),
+            ("Multiple (one) and (two)", vec!["(one)", "(two)"]),
+        ];
+
+        for (text, expected) in cases {
+            let matches: Vec<&str> = prsr.re_parens.find_iter(text).map(|m| m.as_str()).collect();
+            assert_eq!(matches, expected);
+        }
+    }
+
+    #[test]
+    fn test_regex_parens_invalid() {
+        let prsr = Prsr::new();
+
+        // Invalid cases
+        let cases = vec![
+            "No parentheses here",
+            "Unmatched (parentheses",
+            "Unmatched parentheses)",
+            "Another example without",
+        ];
+
+        for text in cases {
+            let matches: Vec<&str> = prsr.re_parens.find_iter(text).map(|m| m.as_str()).collect();
+            assert!(matches.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_regex_name_affectation_valid() {
+        let prsr = Prsr::new();
+
+        // Test quoted text
+        let text1 = r#"This is a "test" for quoted "text"."#;
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text1)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec![r#""test""#, r#""text""#]);
+
+        // Test doctor abbreviation
+        let text2 = "Dr. John, dr. Jane, and DR. Smith. Also Dr DR dr is fine.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text2)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["Dr.", "dr.", "DR.", "Dr", "DR", "dr"]);
+
+        // Test PhD abbreviation
+        let text3 =
+            "John has a PhD, jane has a phd, and SMITH has a PHD. Also Ph. D. and Ph.D. are fine.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text3)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["PhD", "phd", "PHD.", "Ph. D.", "Ph.D."]);
+
+        // Test EdD abbreviation
+        let text3 =
+            "John has a EdD, jane has a edd, and SMITH has a EDD. Also Ed. D. and Ed.D. are fine.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text3)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["EdD", "edd", "EDD.", "Ed. D.", "Ed.D."]);
+
+        // Test JD abbreviation
+        let text2 = "John J.D., Jane J. D., and Smith JD. Also Jd, jd is fine.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text2)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["J.D.", "J. D.", "JD.", "Jd", "jd"]);
+
+        // Test MPH CIH abbreviation
+        let text2 = "John MPH, Jane CIH are a suffixes.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text2)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["MPH", "CIH"]);
+
+        // Test Gov. Jr. II III IV
+        let text2 = "Gov. John, Jr. II III IV are a suffixes.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text2)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["Gov.", "Jr.", "II", "III", "IV"]);
+
+        // Test text in parentheses
+        let text2 = "Sometimes (like now) there are parentheses (here).";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text2)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec!["(like now)", "(here)"]);
+
+        // Test combined text
+        let text4 = r#""Quoted text" Dr. John Doe has a PhD in science."#;
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text4)
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(matches, vec![r#""Quoted text""#, "Dr.", "PhD"]);
+    }
+
+    #[test]
+    fn test_regex_name_affectation_invalid() {
+        let prsr = Prsr::new();
+
+        // Test string with no matches
+        let text1 = "This string has no matches.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text1)
+            .map(|m| m.as_str())
+            .collect();
+        assert!(matches.is_empty());
+
+        // Test string with partial matches
+        let text3 = "A quotation mark \" is not a complete quoted text.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text3)
+            .map(|m| m.as_str())
+            .collect();
+        assert!(matches.is_empty());
+
+        // Test string with name Eddie, Drew
+        let text3 = "The names Eddie, Drew, PHDs, JDZZ, MPHZZ, CIHZZ aren't matches.";
+        let matches: Vec<&str> = prsr
+            .re_name_affectation
+            .find_iter(text3)
+            .map(|m| m.as_str())
+            .collect();
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn test_regex_name_initials_valid() {
+        assert_eq!(
+            PRSR.re_name_initials.replace_all("MICKEY J. MOUSE", ""),
+            "MICKEY MOUSE"
+        );
+        assert_eq!(
+            PRSR.re_name_initials.replace_all("JOHN R. SMITH", ""),
+            "JOHN SMITH"
+        );
+        assert_eq!(
+            PRSR.re_name_initials.replace_all("B. ALICE WALKER", ""),
+            "ALICE WALKER"
+        );
+        assert_eq!(PRSR.re_name_initials.replace_all("A. B. C. D.", ""), "D."); // Test with multiple initials
+        assert_eq!(
+            PRSR.re_name_initials.replace_all("J. K. ROWLING", ""),
+            "ROWLING"
+        ); // Test with multiple initials in sequence
+
+        // Allow: A.C. Quincy
+        // assert_eq!(
+        //     PRSR.re_name_initials.replace_all("JOHN M.L. ADAMS", ""),
+        //     "JOHN ADAMS"
+        // );
+    }
+
+    #[test]
+    fn test_regex_name_initials_invalid() {
+        let prsr = Prsr::new();
+
+        let text3 = "A.C. Quincy";
+        let matches: Vec<&str> = prsr
+            .re_name_initials
+            .find_iter(text3)
+            .map(|m| m.as_str())
+            .collect();
+        eprintln!("{matches:?}");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
     fn test_contains_time_valid() {
         let valid_cases = vec![
             "Lunch at 12 p.m.",
@@ -1471,13 +1751,126 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_initials() {
-        let prsr = Prsr::new();
-        assert_eq!(prsr.remove_initials("MICKEY J. MOUSE"), "MICKEY MOUSE");
-        assert_eq!(prsr.remove_initials("JOHN R. SMITH"), "JOHN SMITH");
-        assert_eq!(prsr.remove_initials("B. ALICE WALKER"), "ALICE WALKER");
-        assert_eq!(prsr.remove_initials("A. B. C. D."), "D."); // Test with multiple initials
-        assert_eq!(prsr.remove_initials("J. K. ROWLING"), "ROWLING"); // Test with multiple initials in sequence
+    fn test_nbsp_replace() {
+        let cases = vec![
+            ("Hello\u{a0}world", "Hello world"),
+            ("\u{a0}Leading and trailing\u{a0}", " Leading and trailing "),
+            ("No\u{a0}break\u{a0}spaces", "No break spaces"),
+            ("Regular spaces only", "Regular spaces only"),
+            ("", ""),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(nbsp_replace(input.to_string()), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn test_zwsp_remove() {
+        let cases = vec![
+            ("Hello\u{200b}world", "Helloworld"),
+            (
+                "\u{200b}Leading and trailing\u{200b}",
+                "Leading and trailing",
+            ),
+            ("Zero\u{200b}width\u{200b}spaces", "Zerowidthspaces"),
+            ("Regular spaces only", "Regular spaces only"),
+            ("", ""),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(zwsp_remove(input.to_string()), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn test_dot_remove() {
+        let cases = vec![
+            ("Hello world.", "Hello world"),
+            ("Sun.rise", "Sunrise"),
+            (".", ""),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(dot_remove(input.to_string()), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn test_name_clean_valid() {
+        let cases = vec![
+            ("Dr. John Doe", "John Doe"),
+            ("Jane A. Smith PhD", "Jane A. Smith"),
+            ("John Q. Public, JD", "John Q. Public"),
+            ("\"The Great\" Dr. John Doe", "John Doe"),
+            ("Dr. Jane A. Doe Ph.D.", "Jane A. Doe"),
+            ("Dr. John Doe, PhD", "John Doe"),
+            ("Ed. D. Jane Smith", "Jane Smith"),
+            ("J. D. John Public", "John Public"),
+            ("Alice Doe MPH CIH", "Alice Doe"),
+            ("Maximum (Max) Name", "Maximum Name"),
+            ("A.C. Public", "A.C. Public"),
+            ("John\u{a0}Quincy", "John Quincy"),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(name_clean(input), expected);
+        }
+    }
+
+    #[test]
+    fn test_name_clean_invalid() {
+        let cases = vec![
+            ("John Doe", "John Doe"),
+            ("Jane Smith", "Jane Smith"),
+            ("Jane Doe", "Jane Doe"),
+            ("John Doe, Esq.", "John Doe, Esq."),
+            ("Mr. John Smith", "Mr. John Smith"),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(name_clean(input), expected);
+        }
+    }
+
+    #[test]
+    fn test_name_clean_split_valid() {
+        let cases = vec![
+            ("Dr. John Doe", ("John".to_string(), "Doe".to_string())),
+            (
+                "Jane A. Smith PhD",
+                ("Jane".to_string(), "Smith".to_string()),
+            ),
+            (
+                "John Q. Public, JD",
+                ("John".to_string(), "Public".to_string()),
+            ),
+            (
+                "\"The Great\" Dr. John Doe",
+                ("John".to_string(), "Doe".to_string()),
+            ),
+            (
+                "Dr. Jane A. Doe Ph.D.",
+                ("Jane".to_string(), "Doe".to_string()),
+            ),
+            ("Dr. John Doe, PhD", ("John".to_string(), "Doe".to_string())),
+            (
+                "Ed. D. Jane Smith",
+                ("Jane".to_string(), "Smith".to_string()),
+            ),
+            (
+                "J. D. John Public",
+                ("John".to_string(), "Public".to_string()),
+            ),
+            (
+                "John Quincy Public",
+                ("John".to_string(), "Quincy Public".to_string()),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(name_clean_split(input), expected);
+        }
     }
 
     #[test]

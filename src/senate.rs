@@ -46,8 +46,8 @@ impl Senate {
                     "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
                 ];
                 for state in states {
-                    let per = senate.fetch_member(state).await?;
-                    senate.persons.push(per);
+                    let pers = senate.fetch_members(state).await?;
+                    senate.persons.extend(pers);
                 }
 
                 // Write file to disk.
@@ -66,27 +66,22 @@ impl Senate {
     }
 
     /// Fetch member from network.
-    pub async fn fetch_member(&self, state: &str) -> Result<Person> {
+    pub async fn fetch_members(&self, state: &str) -> Result<Vec<Person>> {
         let url = format!("https://www.senate.gov/states/{state}/intro.htm");
         let html = fetch_html(&url).await?;
         let document = Html::parse_document(&html);
-        let mut per = Person::default();
+
+        let mut pers = Vec::new();
 
         // Select name and url.
         let name_sel = Selector::parse("div.state-column").expect("Invalid selector");
         let url_sel = Selector::parse("a").expect("Invalid selector");
         for elm_doc in document.select(&name_sel) {
             if let Some(elm_url) = elm_doc.select(&url_sel).next() {
+                let mut per = Person::default();
                 let full_name = elm_url.text().collect::<Vec<_>>().concat();
-                // Select first name and last name.
-                // Full name may have middle name or suffix.
-                let names = full_name
-                    .split_whitespace()
-                    .filter(|&w| w != "Jr." && w != "III")
-                    .map(|w| w.trim_end_matches(','))
-                    .collect::<Vec<_>>();
-                per.name_fst = names[0].trim().to_string();
-                per.name_lst = names[names.len() - 1].trim().to_string();
+                eprintln!("{}", full_name.trim());
+                per.name = name_clean(&full_name);
                 per.url = elm_url
                     .value()
                     .attr("href")
@@ -96,28 +91,25 @@ impl Senate {
                     .to_string();
 
                 // Validate fields.
-                if per.name_fst.is_empty() {
-                    return Err(anyhow!("first name empty {:?}", per));
-                }
-                if per.name_lst.is_empty() {
-                    return Err(anyhow!("last name empty {:?}", per));
+                if per.name.is_empty() {
+                    return Err(anyhow!("name is empty {:?}", per));
                 }
                 if per.url.is_empty() {
-                    return Err(anyhow!("url empty {:?}", per));
+                    return Err(anyhow!("url is empty {:?}", per));
                 }
                 if !per.url.ends_with(".senate.gov") {
                     return Err(anyhow!("url doesn't end with '.senate.gov' {:?}", per));
                 }
-                break;
+
+                pers.push(per);
             }
         }
 
-        if per.name_fst.is_empty() {
-            eprintln!("{url}");
-            return Err(anyhow!("unable to extract member for {state}"));
+        if pers.len() != 2 {
+            return Err(anyhow!("missing two senators for {state}"));
         }
 
-        Ok(per)
+        Ok(pers)
     }
 
     pub async fn fetch_adrs(&mut self) -> Result<()> {
@@ -130,13 +122,10 @@ impl Senate {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-        //.take(1)
+        // .take(1)
         {
             let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
-            eprintln!(
-                "  {}% {} {} {} {}",
-                pct, idx, per.name_fst, per.name_lst, per.url
-            );
+            eprintln!("  {}% {} {} {}", pct, idx, per.name, per.url);
 
             match self.fetch_prs_per(idx, per).await? {
                 Some(adrs) => {
@@ -150,6 +139,7 @@ impl Senate {
                         "",
                         "public",
                         "public/index.cfm/office-locations",
+                        "contact/office-locations",
                     ];
                     for url_path in url_paths {
                         // Create url.
@@ -159,13 +149,9 @@ impl Senate {
                             url.push_str(url_path);
                         }
                         // Fetch, parse, standardize.
-                        match self.fetch_prs_std_adrs(per, &url).await? {
-                            None => {}
-                            Some(adrs) => {
-                                self.persons[idx].adrs = Some(adrs);
-                                self.persons[idx].url_known = Some(url);
-                                break;
-                            }
+                        if let Some(adrs) = fetch_prs_std_adrs(per, &url).await? { 
+                            self.persons[idx].adrs = Some(adrs);
+                            break;
                         }
                     }
                 }
@@ -184,40 +170,9 @@ impl Senate {
         Ok(())
     }
 
-    /// Fetch and parse addresses and standardize with the USPS.
-    pub async fn fetch_prs_std_adrs(
-        &self,
-        per: &Person,
-        url: &str,
-    ) -> Result<Option<Vec<Address>>> {
-        // Fetch html.
-        let html = fetch_html(url).await?;
-
-        // Parse html to address lines.
-        let adr_lnes_o = prs_adr_lnes(per, &html);
-
-        // Parse lines to addresses.
-        let adrs_o = match adr_lnes_o {
-            None => None,
-            Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
-                None => None,
-                Some(mut adrs) => {
-                    adrs = standardize_addresses(adrs).await?;
-                    if adrs.len() < 2 {
-                        None
-                    } else {
-                        Some(adrs)
-                    }
-                }
-            },
-        };
-
-        Ok(adrs_o)
-    }
-
     pub async fn fetch_prs_per(&self, idx: usize, per: &Person) -> Result<Option<Vec<Address>>> {
-        match (per.name_fst.as_str(), per.name_lst.as_str()) {
-            ("John", "Hickenlooper") => {
+        match per.name.as_str() {
+            "John W. Hickenlooper" => {
                 let url = "https://hickenlooper.senate.gov/wp-json/wp/v2/locations";
                 let response = reqwest::get(url).await?.text().await?;
                 let locations: Vec<Location> = serde_json::from_str(&response)?;
@@ -243,12 +198,39 @@ impl Senate {
                 }
                 return Ok(Some(standardize_addresses(adrs).await?));
             }
-            ("", "") => {}
+            "" => {}
             _ => {}
         }
 
         Ok(None)
     }
+}
+
+/// Fetch and parse addresses and standardize with the USPS.
+pub async fn fetch_prs_std_adrs(per: &Person, url: &str) -> Result<Option<Vec<Address>>> {
+    // Fetch html.
+    let html = fetch_html(url).await?;
+
+    // Parse html to address lines.
+    let adr_lnes_o = prs_adr_lnes(per, &html);
+
+    // Parse lines to addresses.
+    let adrs_o = match adr_lnes_o {
+        None => None,
+        Some(mut adr_lnes) => match PRSR.prs_adrs(&adr_lnes) {
+            None => None,
+            Some(mut adrs) => {
+                adrs = standardize_addresses(adrs).await?;
+                if adrs.len() < 2 {
+                    None
+                } else {
+                    Some(adrs)
+                }
+            }
+        },
+    };
+
+    Ok(adrs_o)
 }
 
 pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
@@ -257,6 +239,8 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
     for txt in [
         "li",
         "div.et_pb_blurb_description",
+        "div.et_pb_promo_description",
+        
         "div.OfficeLocations__addressText",
         "div.map-office-box",
         "div.et_pb_text_inner",
@@ -311,9 +295,11 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
                 .filter(|s| PRSR.filter(s))
                 .collect::<Vec<String>>();
 
-            eprintln!("{cur_lnes:?}");
+            if !cur_lnes.is_empty() {
+                eprintln!("{cur_lnes:?}");
 
-            lnes.extend(cur_lnes);
+                lnes.extend(cur_lnes);
+            }
         }
 
         if !lnes.is_empty() {
@@ -336,7 +322,7 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
     edit_char_half(&mut lnes);
     edit_empty(&mut lnes);
 
-    eprintln!("--- post: {lnes:?}");
+    eprintln!("--- --- --- post: {lnes:?}");
 
     // Do not check for zip count here.
 
@@ -344,8 +330,8 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
 }
 
 pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
-    match (per.name_fst.as_str(), per.name_lst.as_str()) {
-        ("Tommy", "Tuberville") => {
+    match per.name.as_str() {
+        "Tommy Tuberville" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "BB&T CENTRE 41 WEST I-65" {
                     lnes[idx] = "41 W I-65 SERVICE RD N STE 2300-A".into();
@@ -353,14 +339,14 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Chuck", "Grassley") => {
+        "Chuck Grassley" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "210 WALNUT STREET" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("Joni", "Ernst") => {
+        "Joni Ernst" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "2146 27" {
                     lnes[idx] = "2146 27TH AVE".into();
@@ -371,42 +357,35 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Roger", "Marshall") => {
+        "Roger Marshall" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("20002") {
                     lnes[idx] = lnes[idx].replace("20002", "20510");
                 }
             }
         }
-        ("Angus", "King") => {
-            for idx in (0..lnes.len()).rev() {
-                if lnes[idx].starts_with("40 WESTERN AVE") {
-                    lnes[idx] = "40 WESTERN AVE UNIT 412".into();
-                }
-            }
-        }
-        ("Benjamin", "Cardin") => {
+        "Benjamin L. Cardin" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "TOWER 1, SUITE 1710" {
                     lnes[idx] = "SUITE 1710".into();
                 }
             }
         }
-        ("Jeanne", "Shaheen") => {
+        "Jeanne Shaheen" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "OFFICE BUILDING" {
                     lnes.remove(idx);
                 }
             }
         }
-        ("Robert", "Menendez") => {
+        "Robert Menendez" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "HARBORSIDE 3, SUITE 1000" {
                     lnes[idx] = "SUITE 1000".into();
                 }
             }
         }
-        ("Martin", "Heinrich") => {
+        "Martin Heinrich" => {
             // "709 HART SENATE OFFICE BUILDING WASHINGTON, D.C. 20510"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("709 HART") {
@@ -415,7 +394,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
             }
         }
 
-        ("Charles", "Schumer") => {
+        "Charles E. Schumer" => {
             // "LEO O'BRIEN BUILDING, ROOM 827"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("LEO O'BRIEN") {
@@ -423,7 +402,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Kevin", "Cramer") => {
+        "Kevin Cramer" => {
             // "328 FEDERAL BUILDING", "220 EAST ROSSER AVENUE"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "328 FEDERAL BUILDING" {
@@ -435,7 +414,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Sheldon", "Whitehouse") => {
+        "Sheldon Whitehouse" => {
             // "HART SENATE OFFICE BLDG., RM. 530"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("HART SENATE") {
@@ -443,7 +422,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("John", "Thune") => {
+        "John Thune" => {
             // "UNITED STATES SENATE SD-511"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx] == "UNITED STATES SENATE SD-511" {
@@ -451,7 +430,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Mike", "Rounds") => {
+        "Mike Rounds" => {
             // "HART SENATE OFFICE BLDG., SUITE 716"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("HART SENATE") {
@@ -459,7 +438,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Marsha", "Blackburn") => {
+        "Marsha Blackburn" => {
             // "10 WEST M. L. KING BLVD"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("10 WEST M") {
@@ -467,7 +446,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Bill", "Hagerty") => {
+        "Bill Hagerty" => {
             // "109 S.HIGHLAND AVENUE"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("109 S") {
@@ -477,7 +456,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Ted", "Cruz") => {
+        "Ted Cruz" => {
             // "MICKEY LELAND FEDERAL BLDG. 1919 SMITH ST., SUITE 9047"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("MICKEY LELAND FEDERAL") {
@@ -487,7 +466,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Peter", "Welch") => {
+        "Peter Welch" => {
             // SR-124 RUSSELL
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("SR-124 RUSSELL") {
@@ -495,7 +474,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("John", "Barrasso") => {
+        "John Barrasso" => {
             // "1575 DEWAR DRIVE (COMMERCE BANK)"
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].ends_with("(COMMERCE BANK)") {
@@ -503,7 +482,7 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("Cynthia", "Lummis") => {
+        "Cynthia M. Lummis" => {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].starts_with("RUSSELL SENATE") {
                     // "RUSSELL SENATE OFFICE BUILDING SUITE SR-127A WASHINGTON, DC 20510"
@@ -516,7 +495,21 @@ pub fn edit_person_senate_lnes(per: &Person, lnes: &mut Vec<String>) {
                 }
             }
         }
-        ("", "") => {}
+        "Jon Tester" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "SILVER BOW CENTER" {
+                    lnes.remove(idx);
+                }
+            }
+        }
+        "John Cornyn" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "WELLS FARGO CENTER" {
+                    lnes.remove(idx);
+                }
+            }
+        }
+        "" => {}
         _ => {}
     }
 }

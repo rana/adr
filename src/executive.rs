@@ -35,14 +35,8 @@ impl Executive {
     pub async fn load() -> Result<Executive> {
         // Read file from disk.
         let mut exec = match read_from_file::<Executive>(FLE_PTH) {
-            Ok(mut exec_from_disk) => {
-                if let Ok(exec_url) = read_from_file::<Executive>(FLE_PTH_URL) {
-                    merge_url_known(&exec_url.persons, &mut exec_from_disk.persons);
-                }
-                exec_from_disk
-            }
+            Ok(exec_from_disk) => exec_from_disk,
             Err(err) => {
-                eprintln!("err: read file: {err}");
                 let mut exec = Executive::new();
 
                 // Set members.
@@ -65,8 +59,7 @@ impl Executive {
 
         // President
         let mut per = Person {
-            name_fst: "Joe".into(),
-            name_lst: "Biden".into(),
+            name: "Joe Biden".into(),
             title1: "Office of the President".into(),
             url: "https://www.whitehouse.gov".into(),
             ..Default::default()
@@ -83,8 +76,7 @@ impl Executive {
 
         // Vice President
         let mut per = Person {
-            name_fst: "Kamala".into(),
-            name_lst: "Harris".into(),
+            name: "Kamala Harris".into(),
             title1: "Office of the Vice President".into(),
             url: "https://www.whitehouse.gov".into(),
             ..Default::default()
@@ -101,8 +93,7 @@ impl Executive {
 
         // Department of State
         let mut per = Person {
-            name_fst: "Antony".into(),
-            name_lst: "Blinken".into(),
+            name: "Antony Blinken".into(),
             title1: "Department of State".into(),
             url: "https://www.state.gov".into(),
             ..Default::default()
