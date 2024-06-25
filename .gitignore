@@ -21,4 +21,5 @@ Cargo.lock
 # Added by Rana
 *.json
 *.csv
+*.pdf
 .cache/
