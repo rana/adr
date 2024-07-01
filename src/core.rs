@@ -80,6 +80,16 @@ fn url_to_filename(url: &str) -> String {
         .collect()
 }
 
+/// Transforms a String to Option<String>.
+/// Empty string is None.
+pub fn string_to_opt(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,9 +98,26 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[test]
+    fn test_string_to_opt_valid() {
+        assert_eq!(
+            string_to_opt("Hello".to_string()),
+            Some("Hello".to_string())
+        );
+        assert_eq!(
+            string_to_opt("world".to_string()),
+            Some("world".to_string())
+        );
+        assert_eq!(
+            string_to_opt("Rust".to_string()),
+            Some("Rust".to_string())
+        );
+        assert_eq!(string_to_opt("".to_string()), None);
+        assert_eq!(string_to_opt(String::new()), None);
+    }
+
+    #[test]
     fn test_fetch_html_with_caching() {
         let runtime = Runtime::new().unwrap();
-        let cli = Client::new();
 
         // Replace with a test URL
         let test_url = "https://www.google.com";

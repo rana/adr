@@ -106,7 +106,7 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-            //.take(1)
+            // .take(1)
         {
             let mut state = state_names[idx];
             if state == "virgin-islands" {
@@ -123,15 +123,17 @@ impl State {
                     city: "ALBANY".into(),
                     state: "NY".into(),
                     zip: "12224".into(),
+                    delivery_point: None,
                     ..Default::default()
                 };
                 self.persons[idx].adrs = Some(vec![adr]);
             } else if state == "american-samoa" {
                 let adr = Address {
-                    address1: "EXECUTIVE OFFICE BUILDING FL 3".into(),
+                    address1: "OFFICE OF THE GOVERNOR".into(),
                     city: "PAGO PAGO".into(),
                     state: "AS".into(),
                     zip: "96799".into(),
+                    delivery_point: None,
                     ..Default::default()
                 };
                 self.persons[idx].adrs = Some(vec![adr]);

@@ -1,3 +1,5 @@
+use crate::core::*;
+use crate::prsr::*;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -34,10 +36,7 @@ impl fmt::Display for Person {
         write!(
             f,
             "{},{},{},{}",
-            self.name,
-            self.title1,
-            self.title2,
-            self.url
+            self.name, self.title1, self.title2, self.url
         )
     }
 }
@@ -57,6 +56,14 @@ impl Ord for Person {
         self.name.cmp(&other.name)
     }
 }
+impl Person {
+    pub fn adr_len(&self) -> usize {
+        self.adrs
+            .as_ref() // Get a reference to the Option<Vec<Address>>
+            .map(|adrs| adrs.len()) // Map the Option to the length of the vector if it exists
+            .unwrap_or(0) // Return 0 if the Option is None
+    }
+}
 
 /// A mailing address.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,26 +73,19 @@ pub struct Address {
     pub city: String,
     pub state: String,
     pub zip: String,
-}
-impl Address {
-    pub fn is_valid(&self) -> bool {
-        self.address1.len() <= 40
-            && self.address2.as_ref().map_or(true, |s| s.len() <= 40)
-            && self.city.len() <= 40
-            && self.state.len() <= 2 // USPS state abbreviations are always 2 characters
-            && self.zip.len() <= 10 // ZIP code can be 5 or 9 digits (with hyphen)
-    }
+    pub delivery_point: Option<String>,
 }
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{},{},{},{},{}",
+            "{},{},{},{},{},{}",
             self.address1,
             self.address2.as_deref().unwrap_or(""),
             self.city,
             self.state,
-            self.zip
+            self.zip,
+            self.delivery_point.as_deref().unwrap_or("")
         )
     }
 }
@@ -101,5 +101,37 @@ impl fmt::Display for AddressList {
             write!(f, "  {}", address)?;
         }
         Ok(())
+    }
+}
+
+/// A mail piece for the USPS.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct MailPiece {
+    pub name: String,
+    pub title1: Option<String>,
+    pub title2: Option<String>,
+    pub address1: String,
+    pub city: String,
+    pub state: String,
+    pub zip: String,
+    pub delivery_point: Option<String>,
+    pub barcode_fadt: String,
+    pub id: u32,
+}
+impl fmt::Display for MailPiece {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{},{},{},{},{},{},{},{},{}",
+            self.name,
+            self.title1.as_deref().unwrap_or(""),
+            self.title2.as_deref().unwrap_or(""),
+            self.address1,
+            self.city,
+            self.state,
+            self.zip,
+            self.delivery_point.as_deref().unwrap_or(""),
+            self.id,
+        )
     }
 }

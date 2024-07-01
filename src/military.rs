@@ -164,7 +164,6 @@ impl Military {
                         full_name.truncate(idx_fnd);
                     }
 
-
                     // Create person.
                     let mut per = Person {
                         name: name_clean(&full_name),
@@ -300,15 +299,12 @@ pub fn prs_adr_lnes(ctr: Center, html: &str) -> Option<Vec<String>> {
 }
 
 pub fn edit_mil_lnes(ctr: Center, lnes: &mut [String]) {
-    match ctr {
-        Oni => {
-            for idx in (0..lnes.len()).rev() {
-                if let Some(idx_fnd) = lnes[idx].find(", USA") {
-                    lnes[idx].truncate(idx_fnd);
-                }
+    if ctr == Oni {
+        for idx in (0..lnes.len()).rev() {
+            if let Some(idx_fnd) = lnes[idx].find(", USA") {
+                lnes[idx].truncate(idx_fnd);
             }
         }
-        _ => {}
     }
 }
 

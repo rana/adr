@@ -160,6 +160,7 @@ pub struct USPSAddress {
     state: String,
     zip5: String,
     zip4: String,
+    delivery_point: Option<String>,
 }
 
 fn from(adr: &mut Address, usps: USPSAddress) {
@@ -171,5 +172,152 @@ fn from(adr: &mut Address, usps: USPSAddress) {
         adr.zip = usps.zip5;
     } else {
         adr.zip = format!("{}-{}", usps.zip5, usps.zip4);
+    }
+    adr.delivery_point = usps.delivery_point;
+}
+
+/// Encodes mailing information to characters
+/// `F`,`A`,`D`,`T`
+/// for use with a barcode font.
+pub async fn encode_barcode_fadt(
+    barcode_id: &str,
+    service_id: &str, // STID
+    mailer_id: &str,
+    serial_id: &str,
+    routing_code: &str,
+) -> Result<String> {
+    // Validate input.
+    if barcode_id.len() != 2
+        || !barcode_id.chars().all(|c| c.is_ascii_digit())
+        || barcode_id.chars().nth(1).unwrap() > '4'
+    {
+        return Err(anyhow!("Invalid barcode_id"));
+    }
+    if service_id.len() != 3 || !service_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(anyhow!("Invalid service_id"));
+    }
+    if mailer_id.len() != 9 || !mailer_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(anyhow!("Invalid mailer_id"));
+    }
+    if serial_id.len() != 6 || !serial_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(anyhow!("Invalid serial_id"));
+    }
+    if !(routing_code.is_empty()
+        || routing_code.len() == 5
+        || routing_code.len() == 9
+        || routing_code.len() == 11)
+        || !routing_code.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(anyhow!("Invalid zip_code"));
+    }
+
+    // Encode information.
+    let qry = format!(
+        "{}{}{}{}{}",
+        barcode_id, service_id, mailer_id, serial_id, routing_code
+    );
+    // eprintln!("qry:{qry}");
+    let url = format!(
+        "https://postalpro.usps.com/ppro-tools-api/imb/encode?imb={}",
+        qry
+    );
+    eprintln!("url:{url}");
+
+    let res = CLI.get(&url).send().await?.json::<ImbResponse>().await?;
+
+    if res.code != "00" {
+        return Err(anyhow!("Error from API: {}", res.code));
+    }
+
+    // Return the encoding.
+    Ok(res.imb)
+}
+#[derive(Deserialize)]
+struct ImbResponse {
+    code: String,
+    imb: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_valid_barcode() {
+        let barcode_id = "50";
+        let service_id = "301";
+        let mailer_id = "899999999";
+        let serial_id = "981000";
+        let zip_code = "12345";
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_barcode_id() {
+        let barcode_id = "5a"; // Invalid
+        let service_id = "301";
+        let mailer_id = "899999999";
+        let serial_id = "981000";
+        let zip_code = "01926";
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_service_id() {
+        let barcode_id = "50";
+        let service_id = "30a"; // Invalid
+        let mailer_id = "899999999";
+        let serial_id = "981000";
+        let zip_code = "01926";
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_mailer_id() {
+        let barcode_id = "50";
+        let service_id = "301";
+        let mailer_id = "89999999a"; // Invalid
+        let serial_id = "981000";
+        let zip_code = "01926";
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_serial_id() {
+        let barcode_id = "50";
+        let service_id = "301";
+        let mailer_id = "899999999";
+        let serial_id = "98100a"; // Invalid
+        let zip_code = "01926";
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_zip_code() {
+        let barcode_id = "50";
+        let service_id = "301";
+        let mailer_id = "899999999";
+        let serial_id = "981000";
+        let zip_code = "0192a"; // Invalid
+
+        let result =
+            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        assert!(result.is_err());
     }
 }

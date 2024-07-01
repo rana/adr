@@ -538,6 +538,7 @@ impl From<LocationAcf> for Address {
             city: acf.city,
             state: acf.state,
             zip: acf.zipcode,
+            ..Default::default()
         }
     }
 }

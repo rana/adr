@@ -69,6 +69,7 @@ impl Executive {
             city: "WASHINGTON".into(),
             state: "DC".into(),
             zip: "20500-0005".into(),
+            delivery_point: Some("00".into()),
             ..Default::default()
         };
         per.adrs = Some(vec![adr]);
@@ -86,6 +87,7 @@ impl Executive {
             city: "WASHINGTON".into(),
             state: "DC".into(),
             zip: "20501-0001".into(),
+            delivery_point: Some("99".into()),
             ..Default::default()
         };
         per.adrs = Some(vec![adr]);
@@ -103,6 +105,7 @@ impl Executive {
             city: "WASHINGTON".into(),
             state: "DC".into(),
             zip: "20520-0001".into(),
+            delivery_point: Some("01".into()),
             ..Default::default()
         };
         per.adrs = Some(vec![adr]);
