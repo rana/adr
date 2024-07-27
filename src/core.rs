@@ -1,5 +1,6 @@
 use crate::models::*;
 use anyhow::{anyhow, Result};
+use chrono::NaiveDate;
 use csv::Writer;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::Client;
@@ -43,20 +44,24 @@ pub fn read_from_file<T: for<'de> Deserialize<'de>>(file_path: &str) -> Result<T
     Ok(data)
 }
 
+pub fn cache_dir() -> PathBuf {
+    PathBuf::from(".cache")
+}
+
 /// Fetches HTML from a URL and caches the response body to a local file.
 pub async fn fetch_html(url: &str) -> Result<String> {
-    let cache_dir = Path::new(".cache");
-    let cache_file = cache_dir.join(url_to_filename(url));
+    let mut pth = cache_dir();
 
     // Create the cache directory if it does not exist
-    if !cache_dir.exists() {
-        fs::create_dir_all(cache_dir)?;
+    if !pth.exists() {
+        fs::create_dir_all(&pth)?;
     }
 
     // Check if the cache file exists
-    if cache_file.exists() {
-        eprintln!("Loading cached HTML from {:?}...", cache_file);
-        let cached_body = fs::read_to_string(&cache_file)?;
+    pth.push(url_to_filename(url));
+    if pth.exists() {
+        eprintln!("Loading cached HTML from {:?}...", &pth);
+        let cached_body = fs::read_to_string(&pth)?;
         return Ok(cached_body);
     }
 
@@ -65,10 +70,36 @@ pub async fn fetch_html(url: &str) -> Result<String> {
     let bdy = res.text().await?;
 
     // Save the fetched body to the cache file
-    let mut file = fs::File::create(&cache_file)?;
+    let mut file = fs::File::create(&pth)?;
     file.write_all(bdy.as_bytes())?;
 
     Ok(bdy)
+}
+
+/// Fetches PDF from a URL and caches the response body to a local file.
+pub async fn fetch_pdf(url: &str) -> Result<PathBuf> {
+    let mut pth = cache_dir();
+
+    // Create the cache directory if it does not exist
+    if !pth.exists() {
+        fs::create_dir_all(&pth)?;
+    }
+
+    // Check if the cache file exists
+    pth.push(url_to_filename(url));
+    if pth.exists() {
+        return Ok(pth);
+    }
+
+    eprintln!("Fetching {url:?}...");
+    let res = CLI.get(url).send().await?;
+    let bdy = res.bytes().await?;
+
+    // Save the fetched body to the cache file
+    let mut file = fs::File::create(&pth)?;
+    file.write_all(&bdy)?;
+
+    Ok(pth)
 }
 
 /// Converts a URL to a safe filename by replacing non-alphanumeric characters.
@@ -90,12 +121,83 @@ pub fn string_to_opt(s: String) -> Option<String> {
     }
 }
 
+pub fn yr_qtr(date: NaiveDate) -> String {
+    use chrono::Datelike;
+    let year = date.year();
+    let month = date.month();
+
+    let quarter = match month {
+        1..=3 => 1,
+        4..=6 => 2,
+        7..=9 => 3,
+        10..=12 => 4,
+        _ => unreachable!(),
+    };
+
+    format!("{}-Q{}", year, quarter)
+}
+
+/// Format an integer with commas.
+pub fn numfmt(num: usize) -> String {
+    let mut ret = String::new();
+    for (i, c) in num.to_string().chars().rev().enumerate() {
+        if i != 0 && i % 3 == 0 {
+            ret.push(',');
+        }
+        ret.push(c);
+    }
+    ret.chars().rev().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use reqwest::Client;
     use std::fs;
     use tokio::runtime::Runtime;
+
+    #[test]
+    fn test_numfmt() {
+        assert_eq!(numfmt(0), "0");
+        assert_eq!(numfmt(100), "100");
+        assert_eq!(numfmt(1000), "1,000");
+        assert_eq!(numfmt(10000), "10,000");
+        assert_eq!(numfmt(100000), "100,000");
+        assert_eq!(numfmt(1000000), "1,000,000");
+        assert_eq!(numfmt(10000000), "10,000,000");
+        assert_eq!(numfmt(100000000), "100,000,000");
+        assert_eq!(numfmt(1000000000), "1,000,000,000");
+    }
+    
+    #[test]
+    fn test_valid_cases() {
+        let test_cases = vec![
+            (
+                NaiveDate::from_ymd_opt(2024, 1, 1).expect("Invalid date"),
+                "2024-Q1",
+            ),
+            (
+                NaiveDate::from_ymd_opt(2024, 4, 1).expect("Invalid date"),
+                "2024-Q2",
+            ),
+            (
+                NaiveDate::from_ymd_opt(2024, 7, 1).expect("Invalid date"),
+                "2024-Q3",
+            ),
+            (
+                NaiveDate::from_ymd_opt(2024, 10, 1).expect("Invalid date"),
+                "2024-Q4",
+            ),
+            (
+                NaiveDate::from_ymd_opt(2024, 12, 31).expect("Invalid date"),
+                "2024-Q4",
+            ),
+        ];
+
+        for (input, expected) in test_cases {
+            assert_eq!(yr_qtr(input), expected);
+        }
+    }
 
     #[test]
     fn test_string_to_opt_valid() {
@@ -107,10 +209,7 @@ mod tests {
             string_to_opt("world".to_string()),
             Some("world".to_string())
         );
-        assert_eq!(
-            string_to_opt("Rust".to_string()),
-            Some("Rust".to_string())
-        );
+        assert_eq!(string_to_opt("Rust".to_string()), Some("Rust".to_string()));
         assert_eq!(string_to_opt("".to_string()), None);
         assert_eq!(string_to_opt(String::new()), None);
     }

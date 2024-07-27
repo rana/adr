@@ -149,7 +149,7 @@ impl Senate {
                             url.push_str(url_path);
                         }
                         // Fetch, parse, standardize.
-                        if let Some(adrs) = fetch_prs_std_adrs(per, &url).await? { 
+                        if let Some(adrs) = fetch_prs_std_adrs(per, &url).await? {
                             self.persons[idx].adrs = Some(adrs);
                             break;
                         }
@@ -178,7 +178,30 @@ impl Senate {
                 let locations: Vec<Location> = serde_json::from_str(&response)?;
                 let mut adrs: Vec<Address> = locations
                     .into_iter()
-                    .map(|location| location.acf.into())
+                    .map(|loc| {
+                        let mut adr = Address {
+                            address1: loc.acf.address,
+                            address2: if loc.acf.suite.is_empty() {
+                                None
+                            } else {
+                                Some(loc.acf.suite)
+                            },
+                            city: loc.acf.city,
+                            state: loc.acf.state,
+                            ..Default::default()
+                        };
+                        let lne_zip = &loc.acf.zipcode;
+                        let is_zip5 = is_zip5(lne_zip);
+                        let is_zip10 = if !is_zip5 { is_zip10(lne_zip) } else { false };
+                        if is_zip5 {
+                            adr.zip5 = lne_zip.parse().unwrap();
+                        } else {
+                            adr.zip5 = lne_zip[..5].parse().unwrap();
+                            adr.zip4 = lne_zip[lne_zip.len() - 4..].parse().unwrap();
+                        }
+
+                        adr
+                    })
                     .collect();
                 for idx in (0..adrs.len()).rev() {
                     if adrs[idx].address1 == "~" {
@@ -240,7 +263,6 @@ pub fn prs_adr_lnes(per: &Person, html: &str) -> Option<Vec<String>> {
         "li",
         "div.et_pb_blurb_description",
         "div.et_pb_promo_description",
-        
         "div.OfficeLocations__addressText",
         "div.map-office-box",
         "div.et_pb_text_inner",
@@ -525,20 +547,4 @@ struct LocationAcf {
     city: String,
     state: String,
     zipcode: String,
-}
-impl From<LocationAcf> for Address {
-    fn from(acf: LocationAcf) -> Self {
-        Address {
-            address1: acf.address,
-            address2: if acf.suite.is_empty() {
-                None
-            } else {
-                Some(acf.suite)
-            },
-            city: acf.city,
-            state: acf.state,
-            zip: acf.zipcode,
-            ..Default::default()
-        }
-    }
 }

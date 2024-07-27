@@ -177,11 +177,18 @@ impl Prsr {
         // Search for a five digit zip code.
         let mut adrs: Vec<Address> = Vec::new();
         for (idx, lne) in lnes.iter().enumerate().rev() {
-            if is_zip(lne) && !is_invalid_zip(lne) {
+            let is_zip5 = is_zip5(lne);
+            let is_zip10 = if !is_zip5 { is_zip10(lne) } else { false };
+            if (is_zip5 || is_zip10) && !is_invalid_zip(lne) {
                 // eprintln!("-- parse_addresses: idx:{idx}");
                 // Start of an address.
                 let mut adr = Address::default();
-                adr.zip.clone_from(lne);
+                if is_zip5 {
+                    adr.zip5 = lne.parse().unwrap();
+                } else {
+                    adr.zip5 = lne[..5].parse().unwrap();
+                    adr.zip4 = lne[lne.len() - 4..].parse().unwrap();
+                }
                 adr.state.clone_from(&lnes[idx - 1]);
                 let idx_city = idx - 2;
                 adr.city.clone_from(&lnes[idx_city]);
@@ -840,7 +847,10 @@ pub fn nbsp_replace(mut s: String) -> String {
 pub fn rht_quo_replace(mut s: String) -> String {
     const RHT_QUO: char = '\u{2019}'; // Right Single Quotation Mark
     if s.contains(RHT_QUO) {
-        s = s.chars().map(|c| if c == RHT_QUO { '\'' } else { c }).collect();
+        s = s
+            .chars()
+            .map(|c| if c == RHT_QUO { '\'' } else { c })
+            .collect();
     }
     s
 }
@@ -1778,9 +1788,7 @@ mod tests {
 
     #[test]
     fn test_rht_quo_replace() {
-        let cases = vec![
-            ("It\u{2019}s a beautiful day!", "It's a beautiful day!"),
-        ];
+        let cases = vec![("It\u{2019}s a beautiful day!", "It's a beautiful day!")];
 
         for (input, expected) in cases {
             assert_eq!(rht_quo_replace(input.to_string()), expected.to_string());
@@ -1833,7 +1841,7 @@ mod tests {
             ("Maximum (Max) Name", "Maximum Name"),
             ("A.C. Public", "A.C. Public"),
             ("John\u{a0}Quincy", "John Quincy"),
-            ("O\u{2019}Connor", "O'Connor")
+            ("O\u{2019}Connor", "O'Connor"),
         ];
 
         for (input, expected) in cases {

@@ -5,16 +5,19 @@ extern crate lazy_static;
 
 use anyhow::{anyhow, Result};
 mod core;
+mod envelope;
 mod executive;
 mod house;
 mod mailing;
 mod military;
 mod models;
 mod nasa;
+mod observer;
 mod prsr;
 mod senate;
 mod state;
 mod usps;
+mod postage_statement;
 use core::*;
 use executive::*;
 use house::*;
@@ -22,6 +25,7 @@ use mailing::*;
 use military::*;
 use models::*;
 use nasa::*;
+use observer::*;
 use prsr::*;
 use senate::*;
 use state::*;
@@ -36,6 +40,7 @@ pub async fn main() -> Result<()> {
     let mut senate = Senate::load().await?;
     let mut house = House::load().await?;
     let mut state = State::load().await?;
+    let mut observer = Observer::load().await?;
 
     // Combine people into single list.
     let mut pers = Vec::with_capacity(1_076);
@@ -45,6 +50,7 @@ pub async fn main() -> Result<()> {
     pers.extend(senate.persons);
     pers.extend(house.persons);
     pers.extend(state.persons);
+    pers.extend(observer.persons);
     eprintln!("{} people", pers.len());
 
     // Create mailing.

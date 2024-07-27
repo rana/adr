@@ -106,13 +106,16 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, per)| per.adrs.is_none())
-            // .take(1)
+        // .take(1)
         {
             let mut state = state_names[idx];
             if state == "virgin-islands" {
                 state = "u-s-virgin-islands";
             }
             let mut url = format!("https://www.usa.gov/states/{}", state);
+            if state == "guam" {
+                url.clone_from(&per.url);
+            }
 
             let pct = (((idx as f64 + 1.0) / per_len) * 100.0) as u8;
             eprintln!("  {}% {} {} {}", pct, idx, state, url);
@@ -122,7 +125,7 @@ impl State {
                     address1: "NYS STATE CAPITOL BUILDING".into(),
                     city: "ALBANY".into(),
                     state: "NY".into(),
-                    zip: "12224".into(),
+                    zip5: 12224,
                     delivery_point: None,
                     ..Default::default()
                 };
@@ -132,7 +135,7 @@ impl State {
                     address1: "OFFICE OF THE GOVERNOR".into(),
                     city: "PAGO PAGO".into(),
                     state: "AS".into(),
-                    zip: "96799".into(),
+                    zip5: 96799,
                     delivery_point: None,
                     ..Default::default()
                 };

@@ -114,16 +114,13 @@ impl House {
                     _ => {}
                 }
 
-                per.url = tbl_elm
-                    .select(&url_sel)
-                    .next()
-                    .map_or(String::new(), |a| {
-                        a.value()
-                            .attr("href")
-                            .unwrap_or_default()
-                            .trim_end_matches('/')
-                            .to_string()
-                    });
+                per.url = tbl_elm.select(&url_sel).next().map_or(String::new(), |a| {
+                    a.value()
+                        .attr("href")
+                        .unwrap_or_default()
+                        .trim_end_matches('/')
+                        .to_string()
+                });
 
                 // Ensure url ends with ".house.gov".
                 // https://katherineclark.house.gov/index.cfm/home"
@@ -406,10 +403,14 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
         }
         "Mike Johnson" => {
             for idx in (0..lnes.len()).rev() {
-                if lnes[idx] == "444 CASPARI DRIVE" || lnes[idx] == "SOUTH HALL ROOM 224" {
+                if lnes[idx] == "444 CASPARI DRIVE" {
+                    lnes.remove(idx + 2);
+                    lnes.remove(idx + 1);
                     lnes.remove(idx);
                 } else if lnes[idx] == "PO BOX 4989 (MAILING)" {
                     lnes[idx] = "PO BOX 4989".into();
+                } else if lnes[idx] == "PO BOX 779 (MAILING)" {
+                    lnes[idx] = "PO BOX 779".into();
                 }
             }
         }
@@ -477,6 +478,16 @@ pub fn edit_person_house_lnes(per: &Person, lnes: &mut Vec<String>) {
             for idx in (0..lnes.len()).rev() {
                 if lnes[idx].contains("CIVIC CENTER") {
                     // "ST FRANCIS CIVIC CENTER"
+                    lnes.remove(idx);
+                }
+            }
+        }
+        "Kevin Kiley" => {
+            for idx in (0..lnes.len()).rev() {
+                if lnes[idx] == "33 SOUTH MAIN STREET" {
+                    lnes.remove(idx + 3);
+                    lnes.remove(idx + 2);
+                    lnes.remove(idx + 1);
                     lnes.remove(idx);
                 }
             }

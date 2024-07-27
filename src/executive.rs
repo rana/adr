@@ -68,7 +68,8 @@ impl Executive {
             address1: "1600 PENNSYLVANIA AVENUE NW".into(),
             city: "WASHINGTON".into(),
             state: "DC".into(),
-            zip: "20500-0005".into(),
+            zip5: 20500,
+            zip4: 5,
             delivery_point: Some("00".into()),
             ..Default::default()
         };
@@ -86,7 +87,8 @@ impl Executive {
             address1: "EEOB".into(),
             city: "WASHINGTON".into(),
             state: "DC".into(),
-            zip: "20501-0001".into(),
+            zip5: 20501,
+            zip4: 1,
             delivery_point: Some("99".into()),
             ..Default::default()
         };
@@ -104,7 +106,8 @@ impl Executive {
             address1: "2201 C STREET NW".into(),
             city: "WASHINGTON".into(),
             state: "DC".into(),
-            zip: "20520-0001".into(),
+            zip5: 20520,
+            zip4: 1,
             delivery_point: Some("01".into()),
             ..Default::default()
         };

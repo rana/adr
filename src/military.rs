@@ -104,7 +104,15 @@ impl Military {
             // Parse address.
             let mut adr = Address::default();
             let mut lne = cur_lnes[2].clone();
-            adr.zip = lne[lne.len() - 10..].into();
+            let lne_zip = &lne[lne.len() - 10..];
+            let is_zip5 = is_zip5(lne_zip);
+            let is_zip10 = if !is_zip5 { is_zip10(lne_zip) } else { false };
+            if is_zip5 {
+                adr.zip5 = lne_zip.parse().unwrap();
+            } else {
+                adr.zip5 = lne_zip[..5].parse().unwrap();
+                adr.zip4 = lne_zip[lne_zip.len() - 4..].parse().unwrap();
+            }
             adr.state = "DC".into();
             adr.city = "WASHINGTON".into();
             lne = lne[..lne.len() - 27].into();

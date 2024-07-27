@@ -31,7 +31,7 @@ pub async fn standardize_addresses(mut adrs: Vec<Address>) -> Result<Vec<Address
 
                                 // Mitigate failed address standardization.
                                 eprintln!("Attempting to standardize address without zip.");
-                                adr.zip = "".into();
+                                adr.zip5 = 0;
                                 eprintln!("  {}", adr);
                                 standardize_address(adr, AsIs, true).await?;
                             }
@@ -97,8 +97,8 @@ pub async fn standardize_address(
     if !adr.state.is_empty() {
         prms.push(("state", adr.state.clone()));
     }
-    if !drop_zip && !adr.zip.is_empty() {
-        prms.push(("zip", adr.zip.clone()));
+    if !drop_zip && adr.zip5 != 0 {
+        prms.push(("zip", format!("{:05}", adr.zip5)));
     }
 
     let response = CLI
@@ -169,9 +169,10 @@ fn from(adr: &mut Address, usps: USPSAddress) {
     adr.city = usps.city;
     adr.state = usps.state;
     if usps.zip4.is_empty() {
-        adr.zip = usps.zip5;
+        adr.zip5 = usps.zip5.parse().unwrap();
     } else {
-        adr.zip = format!("{}-{}", usps.zip5, usps.zip4);
+        adr.zip5 = usps.zip5.parse().unwrap();
+        adr.zip4 = usps.zip4.parse().unwrap();
     }
     adr.delivery_point = usps.delivery_point;
 }
@@ -179,7 +180,7 @@ fn from(adr: &mut Address, usps: USPSAddress) {
 /// Encodes mailing information to characters
 /// `F`,`A`,`D`,`T`
 /// for use with a barcode font.
-pub async fn encode_barcode_fadt(
+pub async fn encode_barcode(
     barcode_id: &str,
     service_id: &str, // STID
     mailer_id: &str,
@@ -250,8 +251,7 @@ mod tests {
         let serial_id = "981000";
         let zip_code = "12345";
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_ok());
         assert!(!result.unwrap().is_empty());
     }
@@ -264,8 +264,7 @@ mod tests {
         let serial_id = "981000";
         let zip_code = "01926";
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_err());
     }
 
@@ -277,8 +276,7 @@ mod tests {
         let serial_id = "981000";
         let zip_code = "01926";
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_err());
     }
 
@@ -290,8 +288,7 @@ mod tests {
         let serial_id = "981000";
         let zip_code = "01926";
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_err());
     }
 
@@ -303,8 +300,7 @@ mod tests {
         let serial_id = "98100a"; // Invalid
         let zip_code = "01926";
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_err());
     }
 
@@ -316,8 +312,7 @@ mod tests {
         let serial_id = "981000";
         let zip_code = "0192a"; // Invalid
 
-        let result =
-            encode_barcode_fadt(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
+        let result = encode_barcode(barcode_id, service_id, mailer_id, serial_id, zip_code).await;
         assert!(result.is_err());
     }
 }

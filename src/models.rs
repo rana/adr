@@ -11,6 +11,7 @@ pub enum Role {
     Military,
     Scientific,
     Political,
+    Observer,
 }
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -18,6 +19,7 @@ impl fmt::Display for Role {
             Role::Military => write!(f, "Military"),
             Role::Scientific => write!(f, "Scientific"),
             Role::Political => write!(f, "Political"),
+            Role::Observer => write!(f, "Observer"),
         }
     }
 }
@@ -72,19 +74,21 @@ pub struct Address {
     pub address2: Option<String>,
     pub city: String,
     pub state: String,
-    pub zip: String,
+    pub zip5: u32,
+    pub zip4: u16,
     pub delivery_point: Option<String>,
 }
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{}",
             self.address1,
             self.address2.as_deref().unwrap_or(""),
             self.city,
             self.state,
-            self.zip,
+            self.zip5,
+            self.zip4,
             self.delivery_point.as_deref().unwrap_or("")
         )
     }
@@ -106,32 +110,41 @@ impl fmt::Display for AddressList {
 
 /// A mail piece for the USPS.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct MailPiece {
+pub struct Mailpiece {
     pub name: String,
     pub title1: Option<String>,
     pub title2: Option<String>,
     pub address1: String,
     pub city: String,
     pub state: String,
-    pub zip: String,
+    pub zip5: u32,
+    pub zip4: u16,
     pub delivery_point: Option<String>,
-    pub barcode_fadt: String,
+    pub barcode: String,
     pub id: u32,
 }
-impl fmt::Display for MailPiece {
+impl fmt::Display for Mailpiece {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{}",
             self.name,
             self.title1.as_deref().unwrap_or(""),
             self.title2.as_deref().unwrap_or(""),
             self.address1,
             self.city,
             self.state,
-            self.zip,
+            self.zip5,
+            self.zip4,
             self.delivery_point.as_deref().unwrap_or(""),
             self.id,
         )
     }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct Letter {
+    pub to: String,
+    pub paragraphs: Vec<String>,
+    pub from: String,
 }
